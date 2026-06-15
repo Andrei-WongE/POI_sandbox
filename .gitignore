@@ -1,0 +1,43 @@
+# History files
+.Rhistory
+.Rapp.history
+
+# RStudio files
+.Rproj.user
+.Rprofile
+
+# Session Data files
+.RData
+.RDataTmp
+
+# User-specific files
+.Ruserdata
+
+# R Environment Variables
+.Renviron
+
+# Data folder
+/data/
+
+/.quarto/
+
+/poi*
+
+# Output files from R CMD build
+/*.tar.gz
+
+# Output files from R CMD check
+/*.Rcheck/
+
+# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
+.httr-oauth
+
+# knitr R markdown and quarto default cache directories
+*_cache/
+/cache/
+/_freeze/
+
+# Temporary files created by R markdown
+*.utf8.md
+*.knit.md
+
