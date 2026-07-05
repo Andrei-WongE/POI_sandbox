@@ -24,11 +24,8 @@
 options(renv.config.pak.enabled = TRUE)
 
 if (!require("here")) {
-
-  renv::install("here"
-  )
+  renv::install("here")
 }
-
 
 pkgs <- c(
   "tidyverse",
@@ -43,7 +40,8 @@ pkgs <- c(
   "ggrepel",
   "ggbreak",
   "duckdb",
-  "duckspatial"
+  "duckspatial",
+  "ellmer"
 )
 
 renv::install(pkgs, verbose = TRUE)
@@ -54,6 +52,8 @@ require(tidyverse)
 require(duckdb)
 require(duckspatial)
 require(janitor)
+require(tidyverse)
+require(ellmer)
 
 ## Program Set-up ------------
 options(scipen = 100, digits = 4) # Prefer non-scientific notation
@@ -140,25 +140,305 @@ london2 <- rmapshaper::ms_simplify(london, keep = 0.05, keep_shapes = TRUE)
 
 # Filter relevant points
 
-# Food outlets
-# 01 Accommodation, eating and drinking
-# 09 Retail 47 Food, drink and multi item retail
-# 02 Eating and drinking  0013 Cafes, snack bars and tea rooms 0020 Fish and chip shops
-# 0018 Fast food and takeaway outlets 0034 Pubs, bars and inns 0019 Fast food delivery services 0043 Restaurants
+# Food outlets,
+# Groupname [01], Categories [02],
+# Classname [0013 Cafes, snack bars and tea rooms [X]
+# 0018 Fast food and takeaway outlets
+# 0019 Fast food delivery services
+# 0020 Fish and chip shops
+# 0034 Pubs, bars and inns
+# 0043 Restaurants]
+
+list(unique(poi_sf$qualifier_data[poi_sf$pointx_class == "01020043"]))
+# [[1]]
+# [1] "Italian Restaurant"          "Indian Restaurant"
+# [3] "French Restaurant"           "Chinese Restaurant"
+# [5] "Pizza Restaurant"            "English Restaurant"
+# [7] "Restaurant"                  "Seafood Restaurant"
+# [9] "Lebanese Restaurant"         "Thai Restaurant"
+# [11] "Pub Food Restaurant"         "American Restaurant"
+# [13] "Japanese Restaurant"         "Korean Restaurant"
+# [15] "Turkish Restaurant"          "International Restaurant"
+# [17] "British Restaurant"          "Brasserie Restaurant"
+# [19] "Vegetarian Restaurant"       "Other Restaurant"
+# [21] "Roadside"                    "Afghan Restaurant"
+# [23] "Ethiopian Restaurant"        "Mediterranean Restaurant"
+# [25] "Nepalese Restaurant"         "Spanish Restaurant"
+# [27] "Oriental Restaurant"         "Portuguese Restaurant"
+# [29] "Caribbean Restaurant"        "Mexican/Tex Mex Restaurant"
+# [31] "Vietnamese Restaurant"       "European Restaurant"
+# [33] "Mexican Restaurant"          "Greek Restaurant"
+# [35] "Pizzeria Restaurant"         "Brazilian Restaurant"
+# [37] "Belgian Restaurant"          "Asian Restaurant"
+# [39] "Moroccan Restaurant"         "African Restaurant"
+# [41] "Argentinian Restaurant"      "Austrian Restaurant"
+# [43] "Middle Eastern Restaurant"   "South American Restaurant"
+# [45] "Iraqi Restaurant"            "Iranian Restaurant"
+# [47] "Restaurant Cruise"           "Egyptian Restaurant"
+# [49] "Continental Restaurant"      "Malaysian Restaurant"
+# [51] "Russian Restaurant"          "Indian/Asian Restaurant"
+# [53] "Cuban Restaurant"            "Pakistani Restaurant"
+# [55] "Creperie Restaurant"         "Swedish Restaurant"
+# [57] "Bangladeshi Restaurant"      "Polish Restaurant"
+# [59] "German Restaurant"           "Tunisian Restaurant"
+# [61] "Philippine Restaurant"       "Eastern European Restaurant"
+# [63] "Motorway Services"           "Jamaican Restaurant"
+# [65] "Scottish Restaurant"         "Kosher Restaurant"
+# [67] "Mauritian Restaurant"        "Mongolian Restaurant"
+# [69] "Indonesian Restaurant"       "Colombian Restaurant"
+
+ethnic_keywords <- c(
+  "afghan", "african", "albanian", "arab", "armenian", "asian", "asian fusion",
+  "bangladeshi", "belgian", "brazilian", "carribean", "caribbean", "chinese",
+  "colombian", "cuban", "egyptian", "ethiopian", "filipino", "georgian",
+  "greek", "indian", "indian/asian", "indonesian", "iraqi", "iranian", "irish",
+  "italian", "jamaican", "japanese", "korean", "kosher", "latin", "lebanese",
+  "malaysian", "mediterranean", "mexican", "mexican/tex mex", "nepalese",
+  "oriental", "pakistani", "peruvian", "portuguese", "russian", "spanish",
+  "thai", "turkish", "vietnamese", "ethiopian", "moroccan", "afghan", "ethiopian"
+)
+
+generic_non_ethnic <- c(
+  "restaurant", "other restaurant", "pub food restaurant", "roadside",
+  "motorway services", "brasserie restaurant"
+)
+
+known_chain_brands <- c(
+  "mcdonald's", "burger king", "kfc", "subway", "domino's", "pizza hut",
+  "nando's", "wagamama", "pret a manger", "costa", "starbucks", "greggs",
+  "five guys", "frankie & benny's", "pizza express", "ask italian",
+  "zizzi", "tortilla", "yo! sushi", "itsu", "leon", "harvester",
+  "wetherspoon", "jd wetherspoon", "beefeater", "bella italia"
+)
+
+ethnic_regex <- paste0(
+  "\\b(",
+  paste(str_replace_all(unique(ethnic_keywords),
+    "([/ ])",
+    "[ /]+"),
+  collapse = "|"),
+  ")\\b"
+)
+
+generic_regex <- paste0(
+  "\\b(",
+  paste(str_replace_all(unique(generic_non_ethnic),
+    "([/ ])",
+    "[ /]+"),
+  collapse = "|"),
+  ")\\b"
+)
+
+chain_regex <- paste0(
+  "\\b(",
+  paste(str_replace_all(unique(known_chain_brands),
+    "([/ '&.-])",
+    "\\\\W*"),
+  collapse = "|"),
+  ")\\b"
+)
+restaurants <- poi_sf |>
+  filter(as.character(pointx_class) == "01020043")  |>
+  mutate(
+    name = coalesce(as.character(name), ""),
+    brand = coalesce(as.character(brand), ""),
+    qualifier_data = coalesce(as.character(qualifier_data), ""),
+    name_l = str_squish(str_to_lower(name)),
+    brand_l = str_squish(str_to_lower(brand)),
+    qual_l  = str_squish(str_to_lower(qualifier_data))
+  )
+
+restaurants_tagged <- restaurants |>
+  mutate(
+    # Detect patterns
+    has_ethnic_qual = str_detect(qual_l, ethnic_regex) & !str_detect(qual_l, generic_regex),
+    has_ethnic_name = str_detect(name_l, ethnic_regex),
+    has_chain_brand = brand_l != "" & str_detect(brand_l, chain_regex),
+    has_chain_name = str_detect(name_l, chain_regex),
+    has_generic_qual = str_detect(qual_l, generic_regex),
+
+    # Apply source hierarchy
+    ethnic_rule = case_when(
+      has_ethnic_qual | has_ethnic_name ~ "ethnic",
+      has_generic_qual ~ "other",
+      qual_l == "" ~ NA_character_,
+      TRUE ~ "other"
+    ),
+    chain_rule = case_when(
+      has_chain_brand | has_chain_name ~ "chain",
+      brand_l == "" ~ NA_character_,
+      TRUE ~ "independent_or_unknown"
+    ),
+
+    # Flag for AI review
+    ai_review_flag = (ethnic_rule == "other" & brand_l != "") |
+      (ethnic_rule == "ethnic" & chain_rule == "chain")
+  ) |>
+  select(-contains("has_"))  # drop intermediate detection flags
+
+# Separate classified and clean
+restaurants_clean <- restaurants_tagged |> filter(!ai_review_flag)
+restaurants_flagged <- restaurants_tagged |> filter(ai_review_flag)
+
+# AI classification only for flagged rows
+Sys.getenv("GEMINI_API_KEY")
+
+if (nrow(restaurants_flagged) > 0) {
+  chat <- chat_google_gemini(model = "gemini-3.1-pro-preview")
+
+  classify_restaurant_ai <- function(name, brand, qualifier_data) {
+    prompt <- paste0(
+      "Classify this restaurant. Return ONLY valid JSON:\n",
+      "{\"ethnic_label\": \"ethnic|other|unknown\",\n",
+      "\"chain_label\": \"chain|independent|unknown\",\n",
+      "\"confidence\": 0.0-1.0,\n",
+      "\"reason\": \"brief explanation\"}\n\n",
+      "name: ", name, "\n",
+      "brand: ", brand, "\n",
+      "qualifier: ", qualifier_data
+    )
+
+    response <- chat$chat(prompt)
+
+    # Extract JSON from response
+    json_str <- str_extract(response, "\\{.*\\}")
+    jsonlite::fromJSON(json_str)
+  }
+  # Batch with progress
+  restaurants_ai <- restaurants_flagged |>
+    rowwise() |>
+    mutate(
+      ai = list(classify_restaurant_ai(name, brand, qualifier_data)),
+      ai_ethnic_label = ai$ethnic_label,
+      ai_chain_label = ai$chain_label,
+      ai_confidence = ai$confidence,
+      ai_reason = ai$reason
+    ) |>
+    ungroup()
+
+  # Add delay between requests to NOT exceeded request limit  HTTP 429 REVIEW
+  for (i in seq_len(nrow(restaurants_flagged))) {
+    if (i %% 10 == 0) cat(i, " rows processed\n")
+    Sys.sleep(2)
+  }
+
+  # Merge back
+  restaurants_final <- bind_rows(
+    restaurants_clean |>
+      mutate(
+        ai_ethnic_label = NA_character_,
+        ai_chain_label = NA_character_,
+        ai_confidence = NA_real_,
+        ai_reason = NA_character_
+      ),
+    restaurants_flagged |>
+      left_join(restaurants_ai, by = c("name", "brand", "qualifier_data"))
+  )
+} else {
+  restaurants_final <- restaurants_clean |>
+    mutate(
+      ai_ethnic_label = NA_character_,
+      ai_chain_label = NA_character_,
+      ai_confidence = NA_real_,
+      ai_reason = NA_character_
+    )
+}
+
+# Final classification
+restaurants_final <- restaurants_final |>
+  mutate(
+    ethnic_final = coalesce(ethnic_rule, ai_ethnic_label, "unknown"),
+    chain_final = coalesce(chain_rule, ai_chain_label, "unknown"),
+    confidence_final = coalesce(ai_confidence, 1.0)
+  ) |>
+  select(
+    geometry, name, brand, qualifier_data,
+    ethnic_final, chain_final, confidence_final, ai_reason,
+    -ethnic_rule, -chain_rule, -ai_review_flag
+  )
+
+# Groupname [09], Categories [47],
+# Classname [0671 Alcoholic drinks including off-licences and wholesalers [X]
+# 0661 Bakeries
+# 0662 Butchers
+# 0768 Cash and carry [X]
+# 0663 Confectioners [X]
+# 0699 Convenience stores and independent supermarkets
+# 0665 Delicatessens
+# 0666 Fishmongers
+# 0667 Frozen foods
+# 0668 Green and new age goods
+# 0669 Grocers, farm shops and pick your own
+# 0670 Herbs and spices
+# 0703 Livestock markets [X]
+# 0705 Markets
+# 0672 Organic, health, gourmet and kosher foods
+# 0819 Supermarket chains
+# 0798 Tea and coffee merchants [X]
 
 # Retail shadow index: independent specialty food stores (e.g., green grocers, Halal butchers, traditional markets)
-# Group 09 = Retail.
-# Category 47 = Food, drink and multi item retail.
-# Then select the specific class, such as 0662 Butchers or 0669 Grocers, farm shops
-# Also use keyword search in respective qualifier_type and qualifier_data columns
+# Core indicator = count of points in 0662, 0669, 0705, 0672.
+# Expanded indicator = core plus 0665, 0666, 0661, 0670.
 
-# Social capital
-# 35 Organisations  0445 Animal welfare organisations 0449 Political parties and related organisations
-# 0816 Charitable organisations 0450 Religious organisations 0769 Community networks and projects
-# 0447 Sports clubs and associations 0446 Fan clubs and associations 0452 Youth organisations
+# Social capital Groupname [06], Categories [35],
+#  Classname [ 0445 Animal welfare organisations
+# 0816 Charitable organisations
+# 0769 Community networks and projects
+# 0446 Fan clubs and associations
 # 0448 Institutes and professional organisations
-require(duckdb)
-require(duckspatial)
+# 0449 Political parties and related organisations
+# 0450 Religious organisations
+# 0447 Sports clubs and associations
+# 0452 Youth organisations]
+
+healthy_classes <- c(
+  "090470661", # Bakeries
+  "090470665", # Delicatessens
+  "090470666", # Fishmongers
+  "090470668", # Green and new age goods
+  "090470669", # Grocers, farm shops and pick your own
+  "090470670", # Herbs and spices
+  "090470672", # Organic, health, gourmet and kosher foods
+  "090470705"  # Markets
+)
+
+unhealthy_classes <- c(
+  "010200018", # Fast food and takeaway outlets
+  "010200019", # Fast food delivery services
+  "010200020", # Fish and chip shops
+  "010200034"  # Pubs, bars and inns
+)
+
+retail_shadow <- c(
+  "090470662", # Butchers
+  "090470669", # Grocers, farm shops and pick your own
+  "090470672", # Organic, health, gourmet and kosher foods
+  "090470705",  # Markets
+  # REVIEW
+  "090470661", # Bakeries
+  "090470665", # Delicatessens
+  "090470666", # Fishmongers
+  "090470670"  # Herbs and spices
+)
+
+social_capital_classes <- c(
+  "060350445", # Animal welfare organisations
+  "060350447", # Sports clubs and associations
+  "060350448", # Institutes and professional organisations
+  "060350449", # Political parties and related organisations
+  "060350450", # Religious organisations
+  "060350452", # Youth organisations
+  "060350769", # Community networks and projects
+  "060350816"  # Charitable organisations
+)
+
+poi_sf <- poi_sf %>%
+  mutate(
+    healthy_retail = pointx_class %in% healthy_classes,
+    unhealthy_retail = pointx_class %in% unhealthy_classes,
+    retail_shadow = pointx_class %in% retail_shadow,
+    social_capital = pointx_class %in% social_capital_classes
+  )
 
 # con <- ddbs_create_conn("poi_boundaries.duckdb")
 # ERROR!!! cause that path is inside OneDrive, the safest conclusion is that the extension

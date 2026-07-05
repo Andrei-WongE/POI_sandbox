@@ -23,6 +23,8 @@
 
 /poi*
 
+/renv/
+
 # Output files from R CMD build
 /*.tar.gz
 
