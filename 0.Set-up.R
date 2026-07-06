@@ -189,13 +189,13 @@ list(unique(poi_sf$qualifier_data[poi_sf$pointx_class == "01020043"]))
 
 ethnic_keywords <- c(
   "afghan", "african", "albanian", "arab", "armenian", "argentinian", "asian",
-  "asian fusion", "bangladeshi", "belgian", "brazilian", "caribbean", "chinese",
+  "asian fusion", "bangladeshi", "brazilian", "caribbean", "chinese",
   "colombian", "cuban", "egyptian", "ethiopian", "filipino", "georgian", "indian",
   "indian", "asian", "indonesian", "iraqi", "iranian", "irish", "jamaican", "japanese",
   "korean", "kosher", "latin", "lebanese", "malaysian", "mauritian",
   "mediterranean", "mexican", "middle eastern", "mongolian", "moroccan", "nepalese",
   "oriental", "pakistani", "peruvian", "philippine", "polish", "portuguese",
-  "russian", "south american", "spanish", "tex mex", "thai", "tunisian", "turkish",
+  "russian", "south american", "tex mex", "thai", "tunisian", "turkish",
   "vietnamese"
 )
 
@@ -204,19 +204,42 @@ ethnic_keywords <- c(
 # continental, swedish, german
 
 generic_non_ethnic <- c(
-  "american", "brasserie restaurant", "british", "continental", "creperie",
+  "american", "austrian", "belgian", "brasserie restaurant", "british", "continental", "creperie",
   "english", "european", "french", "german", "greek", "international",
-  "italian", "motorway services", "other restaurant", "pizzeria",
-  "pub food restaurant", "roadside", "scottish", "seafood", "swedish",
-  "vegetarian"
+  "italian", "motorway services", "other restaurant", "pizzeria", "pizza",
+  "pub food restaurant", "roadside", "scottish", "seafood", "spanish",
+  "swedish", "vegetarian"
 )
 
+# NOT INCLUDED> "ask", "thyme", "aroma", and "poppins"
+
 known_chain_brands <- c(
-  "mcdonald's", "burger king", "kfc", "subway", "domino's", "pizza hut",
-  "nando's", "wagamama", "pret a manger", "costa", "starbucks", "greggs",
-  "five guys", "frankie & benny's", "pizza express", "ask italian",
-  "zizzi", "tortilla", "yo! sushi", "itsu", "leon", "harvester",
-  "wetherspoon", "jd wetherspoon", "beefeater", "bella italia"
+  "angus steak house", "ask italian", "aubaine", "balans", "basilico",
+  "beefeater", "bella italia", "benugo", "bhs restaurant", "bill's",
+  "big fernand", "black & blue", "bodean's bbq", "bonhams restaurant",
+  "brasserie blanc", "brewers fayre", "brinkley's restaurants", "browns",
+  "bubba gump shrimp co", "burger king", "burger & lobster", "byron",
+  "cafe rouge", "chicago rib shack", "coast to coast", "costa", "cote",
+  "corbin & king restaurants", "cosmo", "crown carveries", "d&d london",
+  "del'aziz", "domino's", "ed's easy diner", "favourite chicken & ribs",
+  "fatburger", "fire & stone", "firezza", "five guys", "franco manca",
+  "frankie & benny's", "garfunkel's", "giraffe", "glendola leisure",
+  "gordon ramsay", "gourmet burger kitchen", "greggs", "hard rock cafe",
+  "handmade burger co.", "hawksmoor", "hache", "harvester",
+  "heston blumenthal restaurants", "honest burgers", "hotel chocolat restaurants",
+  "innfusion", "itsu", "jd wetherspoon", "jenny's restaurant", "jimmy spices",
+  "joes kitchen & coffee house", "kebabish original", "kerbisher & malt",
+  "la salle", "las iguanas", "leon", "loch fyne restaurants",
+  "london steakhouse company", "mcdonald's", "mcmanus pub company", "meatliquor",
+  "miller & carter", "miso noodle bar", "moto hospitality limited", "nando's",
+  "old orleans", "papa john's", "perfect pizza", "peyton & byrne restaurants",
+  "pho", "ping pong", "polpo", "pret a manger", "pizza express", "pizza hut",
+  "rossopomodoro", "scoff & banter", "shake shack", "spudulike", "starbucks",
+  "subway", "table table", "t g i friday's", "the diner", "the gaucho grill",
+  "the living room", "tiger bills", "tinseltown", "toby carvery",
+  "tom's kitchen", "tortilla", "tuttons", "vintage inns", "wagamama",
+  "welcome break", "wetherspoon", "white brasserie", "wildwood",
+  "wondertree", "yo! sushi", "young's", "zizzi"
 )
 
 ethnic_regex <- paste0(
@@ -272,26 +295,31 @@ restaurants_tagged <- restaurants |>
     has_chain_name = str_detect(name_l, chain_regex),
     has_generic_qual = str_detect(qual_l, generic_regex),
 
-    # Apply source hierarchy: qualifier > name > brand
-    ethnic_rule = case_when(
-      has_ethnic_qual ~ "ethnic",
-      has_generic_qual ~ "other",
-      has_ethnic_name ~ "ethnic",
-      TRUE ~ "other"
-    ),
-    chain_rule = case_when(
-      has_chain_brand ~ "chain",
-      has_chain_name ~ "chain",
-      TRUE ~ "independent_or_unknown"
+    # Apply source hierarchy: qualifier > name > brand, chain priority over ethnic, generic is independent
+    classification = case_when(
+      has_chain_brand | has_chain_name ~ "chain",
+      has_ethnic_qual | has_ethnic_name ~ "ethnic",
+      has_generic_qual ~ "independent",
+      !has_chain_brand & !has_chain_name & !has_ethnic_qual & !has_ethnic_name & !has_generic_qual ~ "review",
+      .default = "review"
     ),
     # Flag for AI review
-    ai_review_flag = ethnic_rule == "other" & chain_rule == "independent_or_unknown"
-  ) |>
-  select(-contains("has_"))  # drop intermediate detection flags
+    ai_review_flag = classification == "review"
+  ) |> select(-contains("has_")) # drop intermediate detection flags
 
 # Separate classified and clean
 restaurants_clean <- restaurants_tagged |> filter(!ai_review_flag)
 restaurants_flagged <- restaurants_tagged |> filter(ai_review_flag)
+
+# Validate
+restaurants_tagged |>
+  st_drop_geometry() |>
+  count(classification) |>
+  mutate(prop = n / sum(n))
+
+stopifnot(
+  sum(table(restaurants_tagged$classification)) == nrow(restaurants_tagged)
+)
 
 # AI classification only for flagged rows
 Sys.getenv("GEMINI_API_KEY")
