@@ -188,19 +188,27 @@ list(unique(poi_sf$qualifier_data[poi_sf$pointx_class == "01020043"]))
 # [69] "Indonesian Restaurant"       "Colombian Restaurant"
 
 ethnic_keywords <- c(
-  "afghan", "african", "albanian", "arab", "armenian", "asian", "asian fusion",
-  "bangladeshi", "belgian", "brazilian", "carribean", "caribbean", "chinese",
-  "colombian", "cuban", "egyptian", "ethiopian", "filipino", "georgian",
-  "greek", "indian", "indian/asian", "indonesian", "iraqi", "iranian", "irish",
-  "italian", "jamaican", "japanese", "korean", "kosher", "latin", "lebanese",
-  "malaysian", "mediterranean", "mexican", "mexican/tex mex", "nepalese",
-  "oriental", "pakistani", "peruvian", "portuguese", "russian", "spanish",
-  "thai", "turkish", "vietnamese", "ethiopian", "moroccan", "afghan", "ethiopian"
+  "afghan", "african", "albanian", "arab", "armenian", "argentinian", "asian",
+  "asian fusion", "bangladeshi", "belgian", "brazilian", "caribbean", "chinese",
+  "colombian", "cuban", "egyptian", "ethiopian", "filipino", "georgian", "indian",
+  "indian", "asian", "indonesian", "iraqi", "iranian", "irish", "jamaican", "japanese",
+  "korean", "kosher", "latin", "lebanese", "malaysian", "mauritian",
+  "mediterranean", "mexican", "middle eastern", "mongolian", "moroccan", "nepalese",
+  "oriental", "pakistani", "peruvian", "philippine", "polish", "portuguese",
+  "russian", "south american", "spanish", "tex mex", "thai", "tunisian", "turkish",
+  "vietnamese"
 )
 
+# NOT INCLUDED> Italian, French, British/english (what, this exists??), vegetarian,
+# creperie, pizzeria, greek, scottish, seafood, american, international, european,
+# continental, swedish, german
+
 generic_non_ethnic <- c(
-  "restaurant", "other restaurant", "pub food restaurant", "roadside",
-  "motorway services", "brasserie restaurant"
+  "american", "brasserie restaurant", "british", "continental", "creperie",
+  "english", "european", "french", "german", "greek", "international",
+  "italian", "motorway services", "other restaurant", "pizzeria",
+  "pub food restaurant", "roadside", "scottish", "seafood", "swedish",
+  "vegetarian"
 )
 
 known_chain_brands <- c(
@@ -237,6 +245,7 @@ chain_regex <- paste0(
   collapse = "|"),
   ")\\b"
 )
+
 restaurants <- poi_sf |>
   filter(as.character(pointx_class) == "01020043")  |>
   mutate(
@@ -248,6 +257,12 @@ restaurants <- poi_sf |>
     qual_l  = str_squish(str_to_lower(qualifier_data))
   )
 
+# Logic
+# 1. qualifier_data decides ethnic_rule.
+# 2. brand decides chain status.
+# 3. name is a fallback only.
+# 4. AI review only happens when both ethnicity and chain are still unresolved.
+
 restaurants_tagged <- restaurants |>
   mutate(
     # Detect patterns
@@ -257,22 +272,20 @@ restaurants_tagged <- restaurants |>
     has_chain_name = str_detect(name_l, chain_regex),
     has_generic_qual = str_detect(qual_l, generic_regex),
 
-    # Apply source hierarchy
+    # Apply source hierarchy: qualifier > name > brand
     ethnic_rule = case_when(
-      has_ethnic_qual | has_ethnic_name ~ "ethnic",
+      has_ethnic_qual ~ "ethnic",
       has_generic_qual ~ "other",
-      qual_l == "" ~ NA_character_,
+      has_ethnic_name ~ "ethnic",
       TRUE ~ "other"
     ),
     chain_rule = case_when(
-      has_chain_brand | has_chain_name ~ "chain",
-      brand_l == "" ~ NA_character_,
+      has_chain_brand ~ "chain",
+      has_chain_name ~ "chain",
       TRUE ~ "independent_or_unknown"
     ),
-
     # Flag for AI review
-    ai_review_flag = (ethnic_rule == "other" & brand_l != "") |
-      (ethnic_rule == "ethnic" & chain_rule == "chain")
+    ai_review_flag = ethnic_rule == "other" & chain_rule == "independent_or_unknown"
   ) |>
   select(-contains("has_"))  # drop intermediate detection flags
 
