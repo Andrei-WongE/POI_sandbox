@@ -54,6 +54,8 @@ require(duckspatial)
 require(janitor)
 require(tidyverse)
 require(ellmer)
+require(purrr)
+require(jsonlite)
 
 ## Program Set-up ------------
 options(scipen = 100, digits = 4) # Prefer non-scientific notation
@@ -321,59 +323,94 @@ stopifnot(
   sum(table(restaurants_tagged$classification)) == nrow(restaurants_tagged)
 )
 
+# To review 1209
+
+# Logic
+# Run gemini-2.5-flash on all 1209
+# Send only low-confidence cases to gemini-2.5-pro
+
 # AI classification only for flagged rows
 Sys.getenv("GEMINI_API_KEY")
 
 if (nrow(restaurants_flagged) > 0) {
-  chat <- chat_google_gemini(model = "gemini-3.1-pro-preview")
+  chat <- chat_google_gemini(model = "gemini-2.5-flash")
 
-  classify_restaurant_ai <- function(name, brand, qualifier_data) {
+  classify_restaurant_ai <- function(name, brand, qualifier_data, delay_seconds = 2) {
     prompt <- paste0(
-      "Classify this restaurant. Return ONLY valid JSON:\n",
-      "{\"ethnic_label\": \"ethnic|other|unknown\",\n",
-      "\"chain_label\": \"chain|independent|unknown\",\n",
-      "\"confidence\": 0.0-1.0,\n",
-      "\"reason\": \"brief explanation\"}\n\n",
-      "name: ", name, "\n",
-      "brand: ", brand, "\n",
-      "qualifier: ", qualifier_data
+      "Classify this restaurant and return ONLY valid JSON.\n\n",
+
+      "Labels:\n",
+      "- ethnic: Use when the name, brand, or qualifier strongly indicates a specific cuisine or ethnic food tradition.\n",
+      "- other: Use when there is no strong ethnic signal.\n",
+      "- unknown: Use when the text is too ambiguous to decide.\n",
+      "- chain: Use when the restaurant is part of a known multi-site brand or franchise.\n",
+      "- independent: Use when it is not a chain.\n\n",
+
+      "Rules:\n",
+      "1. Chain wins over ethnic if both appear.\n",
+      "2. Generic-only qualifiers should be treated as independent, not review.\n",
+      "3. Use unknown only when the evidence is missing or contradictory.\n\n",
+
+      "Return this exact JSON schema:\n",
+      "{\"ethnic_label\":\"ethnic|other|unknown\",",
+      "\"chain_label\":\"chain|independent|unknown\",",
+      "\"confidence\":0.0,",
+      "\"reason\":\"brief explanation\"}\n\n",
+
+      "Do not add markdown fences. Do not add extra text.\n\n",
+
+      "name: ", coalesce(name, ""), "\n",
+      "brand: ", coalesce(brand, ""), "\n",
+      "qualifier: ", coalesce(qualifier_data, "")
     )
 
-    response <- chat$chat(prompt)
+    response <- tryCatch(
+      chat$chat(prompt),
+      error = function(e) NA_character_
+    )
 
-    # Extract JSON from response
-    json_str <- str_extract(response, "\\{.*\\}")
-    jsonlite::fromJSON(json_str)
+    Sys.sleep(delay_seconds)
+
+    json_str <- str_extract(response, "\\{[\\s\\S]*\\}")
+
+    parsed <- tryCatch(
+      jsonlite::fromJSON(json_str),
+      error = function(e) NULL
+    )
+
+    tibble(
+      ai_ethnic_label = if (!is.null(parsed) && !is.null(parsed$ethnic_label)) parsed$ethnic_label else "unknown",
+      ai_chain_label  = if (!is.null(parsed) && !is.null(parsed$chain_label)) parsed$chain_label else "unknown",
+      ai_confidence   = if (!is.null(parsed) && !is.null(parsed$confidence)) as.numeric(parsed$confidence) else NA_real_,
+      ai_reason       = if (!is.null(parsed) && !is.null(parsed$reason)) parsed$reason else "Parse error",
+      ai_raw_response = response
+    )
   }
+
   # Batch with progress
-  restaurants_ai <- restaurants_flagged |>
-    rowwise() |>
-    mutate(
-      ai = list(classify_restaurant_ai(name, brand, qualifier_data)),
-      ai_ethnic_label = ai$ethnic_label,
-      ai_chain_label = ai$chain_label,
-      ai_confidence = ai$confidence,
-      ai_reason = ai$reason
-    ) |>
-    ungroup()
+  ai_results <- purrr::pmap(
+    list(
+      restaurants_flagged$name,
+      restaurants_flagged$brand,
+      restaurants_flagged$qualifier_data
+    ),
+    classify_restaurant_ai,
+    .progress = "Classifying restaurants"
+  ) |>
+    list_rbind()
 
-  # Add delay between requests to NOT exceeded request limit  HTTP 429 REVIEW
-  for (i in seq_len(nrow(restaurants_flagged))) {
-    if (i %% 10 == 0) cat(i, " rows processed\n")
-    Sys.sleep(2)
-  }
+  restaurants_ai <- bind_cols(restaurants_flagged, ai_results)
 
-  # Merge back
   restaurants_final <- bind_rows(
     restaurants_clean |>
       mutate(
         ai_ethnic_label = NA_character_,
         ai_chain_label = NA_character_,
         ai_confidence = NA_real_,
-        ai_reason = NA_character_
+        ai_reason = NA_character_,
+        ai_raw_response = NA_character_
       ),
-    restaurants_flagged |>
-      left_join(restaurants_ai, by = c("name", "brand", "qualifier_data"))
+    restaurants_ai
   )
 } else {
   restaurants_final <- restaurants_clean |>
@@ -381,7 +418,8 @@ if (nrow(restaurants_flagged) > 0) {
       ai_ethnic_label = NA_character_,
       ai_chain_label = NA_character_,
       ai_confidence = NA_real_,
-      ai_reason = NA_character_
+      ai_reason = NA_character_,
+      ai_raw_response = NA_character_
     )
 }
 
@@ -394,9 +432,23 @@ restaurants_final <- restaurants_final |>
   ) |>
   select(
     geometry, name, brand, qualifier_data,
-    ethnic_final, chain_final, confidence_final, ai_reason,
+    ethnic_final, chain_final, confidence_final, ai_reason, ai_raw_response,
     -ethnic_rule, -chain_rule, -ai_review_flag
   )
+
+# Verify
+n_classified <- nrow(restaurants_final)
+n_total <- nrow(restaurants_clean) + nrow(restaurants_flagged)
+
+if (n_classified != n_total) {
+  stop(
+    paste0(
+      "Final row count mismatch: ",
+      n_classified, " rows in restaurants_final vs ",
+      n_total, " expected rows."
+    )
+  )
+}
 
 # Groupname [09], Categories [47],
 # Classname [0671 Alcoholic drinks including off-licences and wholesalers [X]
