@@ -337,44 +337,35 @@ stopifnot(
 Sys.getenv("GEMINI_API_KEY")
 
 if (nrow(restaurants_flagged) > 0) {
-  chat <- chat_google_gemini(model = "gemini-2.5-flash")
 
-  restaurants_flagged <- restaurants_flagged |>
-    mutate(global_row_id = row_number())
-
-  result_type <- type_array(
-    type_object(
-      "One classification result for one restaurant row.",
-      global_row_id = type_integer(
-        "Row identifier copied exactly from the input row_id."
-      ),
-      ethnic_label = type_enum(
-        c("ethnic", "other", "unknown"),
-        "Use 'ethnic' when the name, brand, or qualifier strongly indicates a specific cuisine or ethnic food tradition; 'other' when there is no strong ethnic signal; 'unknown' when evidence is too ambiguous."
-      ),
-      chain_label = type_enum(
-        c("chain", "independent", "unknown"),
-        "Use 'chain' when the restaurant is part of a known multi-site brand or franchise; 'independent' when it is not a chain; 'unknown' when evidence is too ambiguous."
-      ),
-      confidence = type_number(
-        "Confidence score from 0.0 to 1.0.",
-        required = FALSE
-      ),
-      reason = type_string(
-        "Very brief explanation.",
-        required = FALSE
-      )
+  result_type <- type_object(
+    "One classification result for one restaurant row.",
+    ethnic_label = type_enum(
+      c("ethnic", "other", "unknown"),
+      "Use 'ethnic' when the name, brand, or qualifier strongly indicates a specific cuisine or ethnic food tradition; 'other' when there is no strong ethnic signal; 'unknown' when evidence is too ambiguous."
+    ),
+    chain_label = type_enum(
+      c("chain", "independent", "unknown"),
+      "Use 'chain' when the restaurant is part of a known multi-site brand or franchise; 'independent' when it is not a chain; 'unknown' when evidence is too ambiguous."
+    ),
+    confidence = type_number(
+      "Confidence score from 0.0 to 1.0.",
+      required = FALSE
+    ),
+    reason = type_string(
+      "Very brief explanation.",
+      required = FALSE
     )
   )
 
   prompts <- restaurants_flagged |>
+    st_drop_geometry() |>
     mutate(
       prompt = purrr::pmap_chr(
-        list(global_row_id, name, brand, qualifier_data),
-        function(global_row_id, name, brand, qualifier_data) {
+        list(name, brand, qualifier_data),
+        function(name, brand, qualifier_data) {
           paste0(
             "Classify this restaurant row.\n\n",
-            "row_id: ", global_row_id, "\n",
             "name: ", coalesce(name, ""), "\n",
             "brand: ", coalesce(brand, ""), "\n",
             "qualifier: ", coalesce(qualifier_data, ""), "\n\n",
@@ -390,26 +381,69 @@ if (nrow(restaurants_flagged) > 0) {
 
   dir.create("chunk_results", showWarnings = FALSE)
 
-  ai_results <- parallel_chat_structured(
-    chat = chat,
-    prompts = as.list(prompts$prompt),
-    type = result_type,
-    max_active = 10,
-    rpm = 500,
-    on_error = "continue"
+  message("Starting parallel_chat_structured")
+
+  batch_size <- 100
+
+  batch_ids <- split(
+    seq_len(nrow(prompts)),
+    ceiling(seq_len(nrow(prompts)) / batch_size)
+  )
+
+  results <- vector("list", length(batch_ids))
+
+  chat <- chat_google_gemini(model = "gemini-3.1-flash-lite-preview")
+
+  for (i in seq_along(batch_ids)) {
+    # 15 RPM, 500 RPD, 250K TPM. Only model with a usable RPD for batching.
+
+    idx <- batch_ids[[i]]
+
+    batch_prompts <- as.list(prompts$prompt[idx])
+
+    message("Batch ", i, " / ", length(batch_ids))
+
+    results[[i]] <- parallel_chat_structured(
+      chat = chat,
+      prompts = batch_prompts,
+      type = result_type,
+      max_active = 10,
+      rpm = 500,
+      on_error = "continue"
+    )
+
+    saveRDS(
+      results[[i]],
+      file.path("chunk_results", paste0("batch_", i, ".rds"))
+    )
+  }
+
+  ai_results <- list_rbind(results)
+  if (!".error" %in% names(ai_results)) {
+    ai_results$.error <- NA_character_
+  }
+
+  ai_results <- ai_results
+  mutate(
+    had_error = !is.na(.error),
+    ai_reason = if_else(
+      had_error,
+      "Structured output failed",
+      coalesce(as.character(reason), "No reason returned")
+    ),
+    ai_ethnic_label = coalesce(as.character(ethnic_label), "unknown"),
+    ai_chain_label = coalesce(as.character(chain_label), "unknown"),
+    ai_confidence = suppressWarnings(as.numeric(confidence))
   ) |>
-    as_tibble() |>
-    mutate(
-      ai_ethnic_label = coalesce(as.character(ethnic_label), "unknown"),
-      ai_chain_label = coalesce(as.character(chain_label), "unknown"),
-      ai_confidence = suppressWarnings(as.numeric(confidence)),
-      ai_reason = coalesce(as.character(reason), "Missing row in model output")
-    ) |>
-    select(global_row_id, ai_ethnic_label, ai_chain_label, ai_confidence, ai_reason, everything())
+    select(ai_ethnic_label, ai_chain_label, ai_confidence, ai_reason)
+
+  # saveRDS(ai_results, file.path("chunk_results", "ai_results.rds"))
+
+  message("Finished parallel_chat_structured")
 
   restaurants_ai <- restaurants_flagged |>
     select(-prompt) |>
-    left_join(ai_results, by = "global_row_id")
+    bind_cols(ai_results)
 
   restaurants_final <- bind_rows(
     restaurants_clean |>
@@ -444,7 +478,7 @@ restaurants_final <- restaurants_final |>
   select(
     geometry, name, brand, qualifier_data,
     ethnic_final, chain_final, confidence_final, ai_reason,
-    -ethnic_rule, -chain_rule, any_of("ai_review_flag")
+    -any_of(c("ethnic_rule", "chain_rule", "ai_review_flag", "prompt"))
   )
 # Verify
 n_classified <- nrow(restaurants_final)
@@ -459,6 +493,10 @@ if (n_classified != n_total) {
     )
   )
 }
+
+# 09:42
+system("rundll32 user32.dll,MessageBeep")
+system.time()
 
 # Groupname [09], Categories [47],
 # Classname [0671 Alcoholic drinks including off-licences and wholesalers [X]

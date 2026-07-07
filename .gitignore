@@ -25,6 +25,8 @@
 
 /renv/
 
+/chunk_results/
+
 # Output files from R CMD build
 /*.tar.gz
 
