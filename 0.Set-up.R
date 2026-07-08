@@ -56,6 +56,7 @@ require(tidyverse)
 require(ellmer)
 require(purrr)
 require(jsonlite)
+require(glue)
 
 ## Program Set-up ------------
 options(scipen = 100, digits = 4) # Prefer non-scientific notation
@@ -194,7 +195,15 @@ list(unique(poi_sf$qualifier_data[poi_sf$pointx_class == "01020043"]))
 # Use of lookup tables to recover the full 8-digit PointX
 # USe a set of alternative classification according to food environment lit
 
-# Useful functions, leave it here for visual inspectin
+# Single canonical hierarchy (poi_lookup).
+# Classification mapping moved into a lookup table.
+# Explicit classification ontology and more deterministic rules, added classification_version
+# Traceability retained through pointx_class adn, trace_primary and trace_secondary for classification
+# Food outlet + missing typology → review
+# Food outlet + fully classified → not review
+# Non-food outlet → not review
+
+# Useful functions, leave it here for visual inspection
 read_poi_lookup <- function(filename) {
   read_delim(
     here("Data", "docs", filename),
@@ -224,7 +233,7 @@ classification_fields <- c(
   "formality_typology"
 )
 
-classification_version <- "2026-07-08"
+CLASSIFICATION_VERSION <- "2026-07-08"
 
 brand_lookup <- tribble(
   ~brand_key, ~brand_group, ~economic_refine,
@@ -273,7 +282,7 @@ poi_lookup <- poi_classes %>%
   mutate(
     class_code = paste0(group_number, category_number, class_number)
   ) %>%
-  select(
+  dplyr::select(
     class_code,
     group_number,
     group_description,
@@ -308,12 +317,41 @@ food_typology_lookup <- tribble(
 poi_food_lookup <- poi_lookup %>%
   left_join(food_typology_lookup, by = "class_code")
 
-match_brand_key <- function(brand_value, brand_keys) {
-  hits <- brand_keys[str_detect(brand_value, fixed(brand_keys))]
-  if (length(hits) == 0) NA_character_ else hits[1]
+# Match brand names
+build_brand_patterns <- function(brand_keys) {
+  paste0(
+    "\\b",
+    str_replace_all(brand_keys, "([[:punct:]])", "\\\\\\1"),
+    "\\b"
+  )
 }
 
+match_brand_vectorised <- function(brand_std_vec, brand_keys) {
+  patterns <- build_brand_patterns(brand_keys)
+  result   <- rep(NA_character_, length(brand_std_vec))
+
+  # Loop over brand keys (18 iterations), not over rows
+  for (i in seq_along(brand_keys)) {
+    unmatched <- is.na(result)
+    if (!any(unmatched)) break
+    hits          <- str_detect(brand_std_vec, regex(patterns[i], ignore_case = TRUE))
+    result[unmatched & hits] <- brand_keys[i]
+  }
+  result
+}
+
+# PROBLEM: produces false positives"aldi local" vs "idealdistributors"
+# SOLUTION: Now escapes special characters, wraps it with word boundaries and tests whether
+# whole brand appears in brand_value. CAREFUL picks only first hit
+
+# You are stupid 425,054 × 18 brand checks2≈ 7.7 million regex evaluations, subset to supermarkets
+
 classify_poi_food_typologies <- function(poi_sf) {
+
+  supermarket_classes <- c(
+    "supermarket_chain",
+    "convenience_or_independent_supermarket"
+  )
 
   poi_sf %>%
     mutate(
@@ -329,18 +367,22 @@ classify_poi_food_typologies <- function(poi_sf) {
       poi_category = str_sub(class_code, 3, 4),
       poi_class = str_sub(class_code, 5, 8)
     ) %>%
-    left_join(poi_lookup, by = "class_code") %>%
+    # hierarchy + food typology
+    left_join(poi_food_lookup, by = "class_code") %>%
+    # Select only supermarkets to run brand matching
     mutate(
-      matched_brand_key = map_chr(brand_std, match_brand_key, brand_keys = brand_lookup$brand_key)
+      # You are stupid 425,054 × 18 brand checks ≈ 7.7 million regex evaluations
+      # Subset to supermarkets; vectorised over brand keys not rows
+      matched_brand_key = if_else(
+        food_outlet_base %in% supermarket_classes,
+        match_brand_vectorised(brand_std, brand_lookup$brand_key),
+        NA_character_
+      )
     ) %>%
     left_join(brand_lookup, by = c("matched_brand_key" = "brand_key")) %>%
-    left_join(
-      poi_food_lookup %>%
-        select(class_code, food_outlet_base, public_health_typology, public_health_subtype),
-      by = "class_code"
-    ) %>%
     mutate(
-      express_flag = str_detect(name_std, "\\bexpress\\b|\\blocal\\b|\\bmetro\\b|\\bsimply food\\b|\\blittle waitrose\\b"),
+      express_flag = str_detect(name_std,
+        "\\bexpress\\b|\\blocal\\b|\\bmetro\\b|\\bsimply food\\b|\\blittle waitrose\\b"),
       qualifier_is_cuisine = qualifier_type_std %in% c("restaurant type", "restaurant_type"),
       cuisine_subtype = case_when(
         qualifier_is_cuisine & qualifier_data_std != "" ~ qualifier_data_std,
@@ -401,11 +443,16 @@ classify_poi_food_typologies <- function(poi_sf) {
         TRUE ~ NA_character_
       ),
       classification_rule = class_code,
-      classification_version = classification_version,
-      ai_review_flag = if_any(all_of(classification_fields), is.na),
+      classification_version = CLASSIFICATION_VERSION,
+      is_food_poi = !is.na(food_outlet_base),
+      ai_review_flag = (
+        is_food_poi &
+          if_any(all_of(classification_fields), is.na)
+      ),
       classification_status = case_when(
         ai_review_flag ~ "review",
-        TRUE ~ "classified"
+        is_food_poi ~ "classified",
+        TRUE ~ "non_food"
       )
     )
 }
@@ -414,38 +461,37 @@ summarise_classification_qc <- function(restaurants_tagged) {
 
   n_total <- nrow(restaurants_tagged)
 
-  count_with_prop <- function(data, var) {
+  # .n_total name avoids any collision with dplyr
+  count_with_prop <- function(data, var, .n_total) {
     data %>%
       st_drop_geometry() %>%
       count({{ var }}, name = "n", sort = TRUE) %>%
-      mutate(prop = n / n_total)
+      mutate(prop = n / .n_total)
   }
 
-  status_counts <- count_with_prop(restaurants_tagged, classification_status)
-  food_outlet_counts <- count_with_prop(restaurants_tagged, food_outlet_base)
-  public_health_counts <- count_with_prop(restaurants_tagged, public_health_typology)
-  economic_counts <- count_with_prop(restaurants_tagged, economic_typology)
-  sociocultural_counts <- count_with_prop(restaurants_tagged, sociocultural_typology)
-  formality_counts <- count_with_prop(restaurants_tagged, formality_typology)
+  status_counts <- count_with_prop(restaurants_tagged, classification_status, n_total)
+  food_outlet_counts <- count_with_prop(restaurants_tagged, food_outlet_base, n_total)
+  public_health_counts <- count_with_prop(restaurants_tagged, public_health_typology, n_total)
+  economic_counts <- count_with_prop(restaurants_tagged, economic_typology, n_total)
+  sociocultural_counts <- count_with_prop(restaurants_tagged, sociocultural_typology, n_total)
+  formality_counts <- count_with_prop(restaurants_tagged, formality_typology, n_total)
 
-  unresolved_check <- restaurants_tagged %>%
-    st_drop_geometry() %>%
-    mutate(unresolved = if_any(all_of(classification_fields), is.na)) %>%
-    count(unresolved, ai_review_flag, name = "n")
-
-  stopifnot(sum(status_counts$n) == n_total)
-  stopifnot(sum(food_outlet_counts$n) == n_total)
-  stopifnot(sum(public_health_counts$n) == n_total)
-  stopifnot(sum(economic_counts$n) == n_total)
-  stopifnot(sum(sociocultural_counts$n) == n_total)
-  stopifnot(sum(formality_counts$n) == n_total)
-
+  # Non-food POIs have NA across all classification_fields, exclude from unresolved check!
   unresolved_rows <- restaurants_tagged %>%
     st_drop_geometry() %>%
-    mutate(unresolved = if_any(all_of(classification_fields), is.na))
+    mutate(unresolved = !is.na(food_outlet_base) & if_any(all_of(classification_fields), is.na))
 
-  stopifnot(all(unresolved_rows$ai_review_flag[unresolved_rows$unresolved]))
-  stopifnot(!any(unresolved_rows$ai_review_flag[!unresolved_rows$unresolved]))
+  # All count tables must sum to total; review flags must align with unresolved fields
+  stopifnot(
+    sum(status_counts$n)        == n_total,
+    sum(food_outlet_counts$n)   == n_total,
+    sum(public_health_counts$n) == n_total,
+    sum(economic_counts$n)      == n_total,
+    sum(sociocultural_counts$n) == n_total,
+    sum(formality_counts$n)     == n_total,
+    all(unresolved_rows$ai_review_flag[unresolved_rows$unresolved]),
+    !any(unresolved_rows$ai_review_flag[!unresolved_rows$unresolved])
+  )
 
   list(
     total_n = n_total,
@@ -454,41 +500,46 @@ summarise_classification_qc <- function(restaurants_tagged) {
     public_health_typology = public_health_counts,
     economic_typology = economic_counts,
     sociocultural_typology = sociocultural_counts,
-    formality_typology = formality_counts,
-    unresolved_check = unresolved_check
+    formality_typology = formality_counts
   )
 }
 
+# Action
 restaurants_tagged <- classify_poi_food_typologies(poi_sf)
 
+# Subset for review
 restaurants_clean <- restaurants_tagged %>%
   filter(!ai_review_flag)
 
 restaurants_flagged <- restaurants_tagged %>%
   filter(ai_review_flag)
 
+# Summarise
 qc <- summarise_classification_qc(restaurants_tagged)
 
-# poi_features_enriched |>
-#   filter(group_description == "Accommodation, eating and drinking") |>
-#   select(name, pointx_classification_code, group_description,
-#          category_description, classification_description) |>
-#   head(20)
+# Save outputs
+
+saveRDS(restaurants_tagged,  here("Output", glue("restaurants_tagged_{CLASSIFICATION_VERSION}.rds")))
+saveRDS(restaurants_clean,   here("Output", glue("restaurants_clean_{CLASSIFICATION_VERSION}.rds")))
+saveRDS(restaurants_flagged, here("Output", glue("restaurants_flagged_{CLASSIFICATION_VERSION}.rds")))
+saveRDS(qc,                  here("Output", glue("qc_{CLASSIFICATION_VERSION}.rds")))
 
 # Validate
-# restaurants_tagged |>
-#   st_drop_geometry() |>
-#   count(classification) |>
-#   mutate(prop = n / sum(n))
-#
-# stopifnot(
-#   sum(table(restaurants_tagged$classification)) == nrow(restaurants_tagged)
-# )
+restaurants_tagged %>%
+  st_drop_geometry() %>%
+  filter(!is.na(matched_brand_key)) %>%
+  count(brand_std, matched_brand_key, sort = TRUE) %>%
+  filter(n > 1)
 
-# To review 1209
+# All points results
+# classification_status      n   prop
+# 1              non_food 380737 0.8957
+# 2            classified  44317 0.1043
+
+# To review 1209/66
 
 # Logic
-# Run gemini-3.1-flash-lite on al 1209
+# Run gemini-3.1-flash-lite on all 66
 # Send only low-confidence cases to gemini-2.5-pro
 # sequential batch processing is the safer choice, 50 rows per call
 # Use ellmer batch helpers to manage multi-prompt workflows by ysing
@@ -632,7 +683,7 @@ if (nrow(restaurants_flagged) > 0) {
         as.numeric(confidence)
       )
     ) |>
-    select(
+    dplyr::select(
       row_id,
       ai_ethnic_label,
       ai_chain_label,
@@ -693,7 +744,7 @@ restaurants_final <- restaurants_final |>
     chain_final = coalesce(chain_rule, ai_chain_label, "unknown"),
     confidence_final = coalesce(ai_confidence, 1.0)
   ) |>
-  select(
+  dplyr::select(
     geometry, name, brand, qualifier_data,
     ethnic_final, chain_final, confidence_final, ai_reason,
     -any_of(c("ethnic_rule", "chain_rule", "ai_review_flag", "prompt"))
@@ -823,7 +874,7 @@ path <- here("Data", "poi_6378383.gpkg")
 
 dbExecute(con, sprintf("
   CREATE OR REPLACE TABLE poi AS
-  SELECT *,
+  dplyr::select *,
   geom::GEOMETRY AS geom
   FROM ST_Read('%s')
 ", path))
@@ -833,7 +884,7 @@ dbExecute(con, sprintf("
 DBI::dbGetQuery(con, "PRAGMA table_info('poi')")
 
 DBI::dbGetQuery(con, "
-  SELECT
+  dplyr::select
     COUNT(*) AS n_total,
     SUM(CASE WHEN ST_IsValid(geom) THEN 1 ELSE 0 END) AS n_valid,
     SUM(CASE WHEN NOT ST_IsValid(geom) THEN 1 ELSE 0 END) AS n_invalid
@@ -841,7 +892,7 @@ DBI::dbGetQuery(con, "
 ")
 
 DBI::dbGetQuery(con, "
-  SELECT
+  dplyr::select
     id,
     ST_GeometryType(geom) AS geom_type,
     ST_AsText(geom) AS wkt
@@ -850,7 +901,7 @@ DBI::dbGetQuery(con, "
 ")
 
 DBI::dbGetQuery(con, "
-  SELECT
+  dplyr::select
     COUNT(*) AS n_total,
     SUM(CASE WHEN geom IS NULL THEN 1 ELSE 0 END) AS n_null_geom,
     COUNT(DISTINCT ST_AsText(geom)) AS n_unique_geoms
@@ -858,7 +909,7 @@ DBI::dbGetQuery(con, "
 ")
 
 DBI::dbGetQuery(con, "
-  SELECT
+  dplyr::select
     COUNT(*) AS n_mismatch
   FROM poi
   WHERE ABS(feature_easting - ST_X(geom)) > 0.001
@@ -869,7 +920,7 @@ path <- here("Data", "Boundaries", "LSOA_2011_London_gen_MHW.shp")
 
 dbExecute(con, sprintf("
   CREATE OR REPLACE TABLE lsoa_boundaries AS
-  SELECT *,
+  dplyr::select *,
   geom::GEOMETRY AS geom
   FROM ST_Read('%s')
 ", path))
@@ -883,7 +934,7 @@ dbExecute(con, "CREATE INDEX poi_rtree ON poi USING RTREE (geom_1)")
 dbExecute(con, "
 CREATE OR REPLACE TABLE classified_poi AS
 WITH candidates AS (
-  SELECT
+  dplyr::select
     p.id AS point_id,
     l.LSOA11CD AS lsoa_id,
     ST_Within(p.geom_1, l.geom_1) AS is_within,
@@ -892,7 +943,7 @@ WITH candidates AS (
   LEFT JOIN lsoa_boundaries l
     ON ST_Intersects(p.geom_1, l.geom_1)
 )
-SELECT
+dplyr::select
   point_id,
   CASE
     WHEN MAX(CAST(is_within AS INTEGER)) = 1 THEN 'inside'
@@ -906,7 +957,7 @@ GROUP BY point_id
 ")
 
 dbGetQuery(con, "
-SELECT
+dplyr::select
   point_class,
   COUNT(*) AS n_points,
   SUM(is_within) AS total_is_within,
@@ -919,12 +970,12 @@ ORDER BY point_class
 # 1      inside   369697          369697                 0
 # 2     outside   130156              NA                NA
 
-dbGetQuery(con, "SELECT * FROM classified_poi LIMIT 10") #  No edge cases
+dbGetQuery(con, "dplyr::select * FROM classified_poi LIMIT 10") #  No edge cases
 
 # Assigning each POI point ID to the polygon ID that contains it
 dbExecute(con, "
   CREATE OR REPLACE TABLE points_with_polygons AS
-  SELECT
+  dplyr::select
   p.*,
   l.LSOA11CD AS LSOA11CD
   FROM poi p
@@ -935,11 +986,11 @@ dbExecute(con, "
 DBI::dbGetQuery(con, "PRAGMA table_info('points_with_polygons')")
 
 # Extract table to R,
-points_with_polygons <- DBI::dbGetQuery(con, "SELECT * FROM points_with_polygons")
+points_with_polygons <- DBI::dbGetQuery(con, "dplyr::select * FROM points_with_polygons")
 
 dbGetQuery(con, "SHOW TABLES")
 
-dbGetQuery(con, "SELECT COUNT(*) FROM points_with_polygons")
+dbGetQuery(con, "dplyr::select COUNT(*) FROM points_with_polygons")
 # count_star()
 # 1       369697
 

@@ -27,6 +27,10 @@
 
 /chunk_results/
 
+/Output/
+
+/Figures/
+
 # Output files from R CMD build
 /*.tar.gz
 
