@@ -189,144 +189,306 @@ list(unique(poi_sf$qualifier_data[poi_sf$pointx_class == "01020043"]))
 # [67] "Mauritian Restaurant"        "Mongolian Restaurant"
 # [69] "Indonesian Restaurant"       "Colombian Restaurant"
 
-ethnic_keywords <- c(
-  "afghan", "african", "albanian", "arab", "armenian", "argentinian", "asian",
-  "asian fusion", "bangladeshi", "brazilian", "caribbean", "chinese",
-  "colombian", "cuban", "egyptian", "ethiopian", "filipino", "georgian", "indian",
-  "indian", "asian", "indonesian", "iraqi", "iranian", "irish", "jamaican", "japanese",
-  "korean", "kosher", "latin", "lebanese", "malaysian", "mauritian",
-  "mediterranean", "mexican", "middle eastern", "mongolian", "moroccan", "nepalese",
-  "oriental", "pakistani", "peruvian", "philippine", "polish", "portuguese",
-  "russian", "south american", "tex mex", "thai", "tunisian", "turkish",
-  "vietnamese"
+# Logic
+# POI Class > Research Typology > Brand Refinement > Cuisine Refinement
+# Use of lookup tables to recover the full 8-digit PointX
+# USe a set of alternative classification according to food environment lit
+
+# Useful functions, leave it here for visual inspectin
+read_poi_lookup <- function(filename) {
+  read_delim(
+    here("Data", "docs", filename),
+    delim = "|",
+    quote = "\"",
+    trim_ws = TRUE,
+    col_types = cols(.default = col_character()),
+    show_col_types = FALSE
+  ) %>%
+    clean_names()
+}
+
+norm_chr <- function(x) {
+  x %>%
+    as.character() %>%
+    replace_na("") %>%
+    str_to_lower() %>%
+    str_squish()
+}
+
+classification_fields <- c(
+  "food_outlet_base",
+  "public_health_typology",
+  "public_health_subtype",
+  "economic_typology",
+  "sociocultural_typology",
+  "formality_typology"
 )
 
-# NOT INCLUDED> Italian, French, British/english (what, this exists??), vegetarian,
-# creperie, pizzeria, greek, scottish, seafood, american, international, european,
-# continental, swedish, german
+classification_version <- "2026-07-08"
 
-generic_non_ethnic <- c(
-  "american", "austrian", "belgian", "brasserie restaurant", "british", "continental", "creperie",
-  "english", "european", "french", "german", "greek", "international",
-  "italian", "motorway services", "other restaurant", "pizzeria", "pizza",
-  "pub food restaurant", "roadside", "scottish", "seafood", "spanish",
-  "swedish", "vegetarian"
+brand_lookup <- tribble(
+  ~brand_key, ~brand_group, ~economic_refine,
+  "aldi", "hard_discounter", "hard_discounter",
+  "lidl", "hard_discounter", "hard_discounter",
+  "iceland", "hard_discounter", "hard_discounter",
+  "waitrose", "premium", "premium_supermarket",
+  "marks & spencer", "premium", "premium_supermarket",
+  "m&s", "premium", "premium_supermarket",
+  "whole foods", "premium", "premium_supermarket",
+  "planet organic", "premium", "premium_supermarket",
+  "tesco", "mainstream_chain", "standard_supermarket_chain",
+  "sainsbury's", "mainstream_chain", "standard_supermarket_chain",
+  "sainsburys", "mainstream_chain", "standard_supermarket_chain",
+  "asda", "mainstream_chain", "standard_supermarket_chain",
+  "morrisons", "mainstream_chain", "standard_supermarket_chain",
+  "co-op", "mainstream_chain", "standard_supermarket_chain",
+  "coop", "mainstream_chain", "standard_supermarket_chain",
+  "spar", "mainstream_chain", "standard_supermarket_chain",
+  "budgens", "mainstream_chain", "standard_supermarket_chain"
 )
 
-# NOT INCLUDED> "ask", "thyme", "aroma", and "poppins"
-
-known_chain_brands <- c(
-  "angus steak house", "ask italian", "aubaine", "balans", "basilico",
-  "beefeater", "bella italia", "benugo", "bhs restaurant", "bill's",
-  "big fernand", "black & blue", "bodean's bbq", "bonhams restaurant",
-  "brasserie blanc", "brewers fayre", "brinkley's restaurants", "browns",
-  "bubba gump shrimp co", "burger king", "burger & lobster", "byron",
-  "cafe rouge", "chicago rib shack", "coast to coast", "costa", "cote",
-  "corbin & king restaurants", "cosmo", "crown carveries", "d&d london",
-  "del'aziz", "domino's", "ed's easy diner", "favourite chicken & ribs",
-  "fatburger", "fire & stone", "firezza", "five guys", "franco manca",
-  "frankie & benny's", "garfunkel's", "giraffe", "glendola leisure",
-  "gordon ramsay", "gourmet burger kitchen", "greggs", "hard rock cafe",
-  "handmade burger co.", "hawksmoor", "hache", "harvester",
-  "heston blumenthal restaurants", "honest burgers", "hotel chocolat restaurants",
-  "innfusion", "itsu", "jd wetherspoon", "jenny's restaurant", "jimmy spices",
-  "joes kitchen & coffee house", "kebabish original", "kerbisher & malt",
-  "la salle", "las iguanas", "leon", "loch fyne restaurants",
-  "london steakhouse company", "mcdonald's", "mcmanus pub company", "meatliquor",
-  "miller & carter", "miso noodle bar", "moto hospitality limited", "nando's",
-  "old orleans", "papa john's", "perfect pizza", "peyton & byrne restaurants",
-  "pho", "ping pong", "polpo", "pret a manger", "pizza express", "pizza hut",
-  "rossopomodoro", "scoff & banter", "shake shack", "spudulike", "starbucks",
-  "subway", "table table", "t g i friday's", "the diner", "the gaucho grill",
-  "the living room", "tiger bills", "tinseltown", "toby carvery",
-  "tom's kitchen", "tortilla", "tuttons", "vintage inns", "wagamama",
-  "welcome break", "wetherspoon", "white brasserie", "wildwood",
-  "wondertree", "yo! sushi", "young's", "zizzi"
-)
-
-ethnic_regex <- paste0(
-  "\\b(",
-  paste(str_replace_all(unique(ethnic_keywords),
-    "([/ ])",
-    "[ /]+"),
-  collapse = "|"),
-  ")\\b"
-)
-
-generic_regex <- paste0(
-  "\\b(",
-  paste(str_replace_all(unique(generic_non_ethnic),
-    "([/ ])",
-    "[ /]+"),
-  collapse = "|"),
-  ")\\b"
-)
-
-chain_regex <- paste0(
-  "\\b(",
-  paste(str_replace_all(unique(known_chain_brands),
-    "([/ '&.-])",
-    "\\\\W*"),
-  collapse = "|"),
-  ")\\b"
-)
-
-restaurants <- poi_sf |>
-  filter(as.character(pointx_class) == "01020043")  |>
-  mutate(
-    name = coalesce(as.character(name), ""),
-    brand = coalesce(as.character(brand), ""),
-    qualifier_data = coalesce(as.character(qualifier_data), ""),
-    name_l = str_squish(str_to_lower(name)),
-    brand_l = str_squish(str_to_lower(brand)),
-    qual_l  = str_squish(str_to_lower(qualifier_data))
+poi_groups <- read_poi_lookup("POI GROUPS.txt") %>%
+  transmute(
+    group_number = str_pad(group_number, 2, pad = "0"),
+    group_description
   )
 
-# Logic
-# 1. qualifier_data decides ethnic_rule.
-# 2. brand decides chain status.
-# 3. name is a fallback only.
-# 4. AI review only happens when both ethnicity and chain are still unresolved.
+poi_categories <- read_poi_lookup("POI CATEGORIES.txt") %>%
+  transmute(
+    category_number = str_pad(category_number, 2, pad = "0"),
+    group_number = str_pad(group_number_foreign_key, 2, pad = "0"),
+    category_description
+  )
 
-restaurants_tagged <- restaurants |>
+poi_classes <- read_poi_lookup("POI_CLASSIFICATIONS.txt") %>%
+  transmute(
+    class_number = str_pad(class_number, 4, pad = "0"),
+    category_number = str_pad(category_number_foreign_key, 2, pad = "0"),
+    poi_class_desc = classification_description
+  )
+
+poi_lookup <- poi_classes %>%
+  left_join(poi_categories, by = "category_number") %>%
+  left_join(poi_groups, by = "group_number") %>%
   mutate(
-    # Detect patterns
-    has_ethnic_qual = str_detect(qual_l, ethnic_regex) & !str_detect(qual_l, generic_regex),
-    has_ethnic_name = str_detect(name_l, ethnic_regex),
-    has_chain_brand = brand_l != "" & str_detect(brand_l, chain_regex),
-    has_chain_name = str_detect(name_l, chain_regex),
-    has_generic_qual = str_detect(qual_l, generic_regex),
+    class_code = paste0(group_number, category_number, class_number)
+  ) %>%
+  select(
+    class_code,
+    group_number,
+    group_description,
+    category_number,
+    category_description,
+    class_number,
+    poi_class_desc
+  )
 
-    # Apply source hierarchy: qualifier > name > brand, chain priority over ethnic, generic is independent
-    classification = case_when(
-      has_chain_brand | has_chain_name ~ "chain",
-      has_ethnic_qual | has_ethnic_name ~ "ethnic",
-      has_generic_qual ~ "independent",
-      !has_chain_brand & !has_chain_name & !has_ethnic_qual & !has_ethnic_name & !has_generic_qual ~ "review",
-      .default = "review"
-    ),
-    # Flag for AI review
-    ai_review_flag = classification == "review"
-  ) |> select(-contains("has_")) # drop intermediate detection flags
+food_typology_lookup <- tribble(
+  ~class_code, ~food_outlet_base, ~public_health_typology, ~public_health_subtype,
+  "01020013", "cafe_snackbar_tearoom", "mixed_or_context_dependent", "cafe_snack_bar_tea_room",
+  "01020018", "fastfood_takeaway", "unhealthy_or_risk", "fast_food_takeaway",
+  "01020019", "fastfood_delivery_service", "unhealthy_or_risk", "fast_food_delivery_service",
+  "01020020", "fish_chip_shop", "unhealthy_or_risk", "fish_and_chip_shop",
+  "01020043", "restaurant", "mixed_or_context_dependent", "restaurant",
+  "09470661", "bakery", "mixed_or_context_dependent", "bakery",
+  "09470662", "butcher", "healthy_or_supportive_fresh_food", "butcher",
+  "09470663", "confectioner", "unhealthy_or_risk", "confectioner",
+  "09470665", "delicatessen", "mixed_or_context_dependent", "delicatessen",
+  "09470666", "fishmonger", "healthy_or_supportive_fresh_food", "fishmonger",
+  "09470667", "frozen_food_retail", "mixed_or_context_dependent", "frozen_food_shop",
+  "09470669", "grocer_farmshop_pyo", "healthy_or_supportive_fresh_food", "grocer_farmshop",
+  "09470671", "offlicence_alcohol_retail", "unhealthy_or_risk", "off_licence",
+  "09470672", "organic_health_specialist", "healthy_or_supportive_fresh_food", "organic_health_food_shop",
+  "09470699", "convenience_or_independent_supermarket", "mixed_or_context_dependent", "convenience_store_or_independent_supermarket",
+  "09470705", "market", "potentially_supportive_fresh_food", "market",
+  "09470768", "cash_and_carry", "mixed_or_context_dependent", "cash_and_carry",
+  "09470819", "supermarket_chain", "healthy_or_supportive_fresh_food", "supermarket"
+)
 
-# Separate classified and clean
-restaurants_clean <- restaurants_tagged |> filter(!ai_review_flag)
-restaurants_flagged <- restaurants_tagged |> filter(ai_review_flag)
+poi_food_lookup <- poi_lookup %>%
+  left_join(food_typology_lookup, by = "class_code")
+
+match_brand_key <- function(brand_value, brand_keys) {
+  hits <- brand_keys[str_detect(brand_value, fixed(brand_keys))]
+  if (length(hits) == 0) NA_character_ else hits[1]
+}
+
+classify_poi_food_typologies <- function(poi_sf) {
+
+  poi_sf %>%
+    mutate(
+      class_code = pointx_class %>%
+        as.character() %>%
+        str_extract("\\d{1,8}") %>%
+        str_pad(width = 8, side = "left", pad = "0"),
+      brand_std = norm_chr(brand),
+      qualifier_type_std = norm_chr(qualifier_type),
+      qualifier_data_std = norm_chr(qualifier_data),
+      name_std = norm_chr(name),
+      poi_group = str_sub(class_code, 1, 2),
+      poi_category = str_sub(class_code, 3, 4),
+      poi_class = str_sub(class_code, 5, 8)
+    ) %>%
+    left_join(poi_lookup, by = "class_code") %>%
+    mutate(
+      matched_brand_key = map_chr(brand_std, match_brand_key, brand_keys = brand_lookup$brand_key)
+    ) %>%
+    left_join(brand_lookup, by = c("matched_brand_key" = "brand_key")) %>%
+    left_join(
+      poi_food_lookup %>%
+        select(class_code, food_outlet_base, public_health_typology, public_health_subtype),
+      by = "class_code"
+    ) %>%
+    mutate(
+      express_flag = str_detect(name_std, "\\bexpress\\b|\\blocal\\b|\\bmetro\\b|\\bsimply food\\b|\\blittle waitrose\\b"),
+      qualifier_is_cuisine = qualifier_type_std %in% c("restaurant type", "restaurant_type"),
+      cuisine_subtype = case_when(
+        qualifier_is_cuisine & qualifier_data_std != "" ~ qualifier_data_std,
+        TRUE ~ NA_character_
+      ),
+      economic_typology = case_when(
+        food_outlet_base == "supermarket_chain" & economic_refine == "hard_discounter" ~ "hard_discounter",
+        food_outlet_base == "supermarket_chain" & economic_refine == "premium_supermarket" ~ "premium_supermarket",
+        food_outlet_base == "supermarket_chain" & express_flag ~ "local_express_topup",
+        food_outlet_base == "supermarket_chain" ~ "superstore_or_full_line_chain",
+        food_outlet_base == "convenience_or_independent_supermarket" ~ "small_convenience_or_independent_supermarket",
+        food_outlet_base == "cash_and_carry" ~ "bulk_value_wholesale",
+        food_outlet_base == "market" ~ "market_retail",
+        food_outlet_base == "fastfood_delivery_service" ~ "delivery_focused_foodservice",
+        food_outlet_base %in% c("grocer_farmshop_pyo", "butcher", "fishmonger", "bakery", "delicatessen", "organic_health_specialist") ~ "specialist_food_retail",
+        !is.na(food_outlet_base) ~ "other_foodservice_or_retail",
+        TRUE ~ NA_character_
+      ),
+      economic_price_signal = case_when(
+        economic_typology == "hard_discounter" ~ "value",
+        economic_typology == "premium_supermarket" ~ "premium",
+        economic_typology == "local_express_topup" ~ "topup_premium_risk",
+        economic_typology == "small_convenience_or_independent_supermarket" ~ "possible_poverty_premium",
+        economic_typology == "market_retail" ~ "variable_often_low_cost",
+        economic_typology == "bulk_value_wholesale" ~ "bulk_value",
+        !is.na(economic_typology) ~ "unknown",
+        TRUE ~ NA_character_
+      ),
+      sociocultural_typology = case_when(
+        food_outlet_base == "market" ~ "informal_market_food_or_mixed_market",
+        qualifier_is_cuisine & !is.na(cuisine_subtype) & food_outlet_base %in% c("restaurant", "cafe_snackbar_tearoom", "fastfood_takeaway", "fish_chip_shop", "fastfood_delivery_service") ~ "cuisine_specific_foodservice",
+        qualifier_is_cuisine & !is.na(cuisine_subtype) & food_outlet_base %in% c("grocer_farmshop_pyo", "convenience_or_independent_supermarket", "supermarket_chain", "organic_health_specialist", "delicatessen") ~ "cuisine_or_ethnic_specialty_retail",
+        food_outlet_base %in% c("grocer_farmshop_pyo", "butcher", "fishmonger", "convenience_or_independent_supermarket", "supermarket_chain", "bakery", "delicatessen", "organic_health_specialist", "offlicence_alcohol_retail", "cash_and_carry") ~ "grocery_retail_general",
+        food_outlet_base %in% c("restaurant", "cafe_snackbar_tearoom", "fastfood_takeaway", "fish_chip_shop", "fastfood_delivery_service") ~ "foodservice_general",
+        !is.na(food_outlet_base) ~ "other_or_unknown",
+        TRUE ~ NA_character_
+      ),
+      formality_typology = case_when(
+        food_outlet_base == "market" ~ "informal_or_mixed",
+        food_outlet_base == "fastfood_delivery_service" ~ "delivery_service",
+        food_outlet_base %in% c(
+          "supermarket_chain", "grocer_farmshop_pyo", "butcher", "fishmonger",
+          "convenience_or_independent_supermarket", "bakery", "confectioner",
+          "delicatessen", "frozen_food_retail", "organic_health_specialist",
+          "offlicence_alcohol_retail", "cash_and_carry",
+          "restaurant", "cafe_snackbar_tearoom", "fastfood_takeaway", "fish_chip_shop"
+        ) ~ "formal_brick_and_mortar",
+        !is.na(food_outlet_base) ~ "unknown",
+        TRUE ~ NA_character_
+      ),
+      trace_primary = case_when(
+        !is.na(food_outlet_base) ~ "pointx_class",
+        TRUE ~ NA_character_
+      ),
+      trace_secondary = case_when(
+        !is.na(matched_brand_key) ~ "brand",
+        qualifier_is_cuisine & !is.na(cuisine_subtype) ~ "qualifier_type_and_data",
+        TRUE ~ NA_character_
+      ),
+      classification_rule = class_code,
+      classification_version = classification_version,
+      ai_review_flag = if_any(all_of(classification_fields), is.na),
+      classification_status = case_when(
+        ai_review_flag ~ "review",
+        TRUE ~ "classified"
+      )
+    )
+}
+
+summarise_classification_qc <- function(restaurants_tagged) {
+
+  n_total <- nrow(restaurants_tagged)
+
+  count_with_prop <- function(data, var) {
+    data %>%
+      st_drop_geometry() %>%
+      count({{ var }}, name = "n", sort = TRUE) %>%
+      mutate(prop = n / n_total)
+  }
+
+  status_counts <- count_with_prop(restaurants_tagged, classification_status)
+  food_outlet_counts <- count_with_prop(restaurants_tagged, food_outlet_base)
+  public_health_counts <- count_with_prop(restaurants_tagged, public_health_typology)
+  economic_counts <- count_with_prop(restaurants_tagged, economic_typology)
+  sociocultural_counts <- count_with_prop(restaurants_tagged, sociocultural_typology)
+  formality_counts <- count_with_prop(restaurants_tagged, formality_typology)
+
+  unresolved_check <- restaurants_tagged %>%
+    st_drop_geometry() %>%
+    mutate(unresolved = if_any(all_of(classification_fields), is.na)) %>%
+    count(unresolved, ai_review_flag, name = "n")
+
+  stopifnot(sum(status_counts$n) == n_total)
+  stopifnot(sum(food_outlet_counts$n) == n_total)
+  stopifnot(sum(public_health_counts$n) == n_total)
+  stopifnot(sum(economic_counts$n) == n_total)
+  stopifnot(sum(sociocultural_counts$n) == n_total)
+  stopifnot(sum(formality_counts$n) == n_total)
+
+  unresolved_rows <- restaurants_tagged %>%
+    st_drop_geometry() %>%
+    mutate(unresolved = if_any(all_of(classification_fields), is.na))
+
+  stopifnot(all(unresolved_rows$ai_review_flag[unresolved_rows$unresolved]))
+  stopifnot(!any(unresolved_rows$ai_review_flag[!unresolved_rows$unresolved]))
+
+  list(
+    total_n = n_total,
+    classification_status = status_counts,
+    food_outlet_base = food_outlet_counts,
+    public_health_typology = public_health_counts,
+    economic_typology = economic_counts,
+    sociocultural_typology = sociocultural_counts,
+    formality_typology = formality_counts,
+    unresolved_check = unresolved_check
+  )
+}
+
+restaurants_tagged <- classify_poi_food_typologies(poi_sf)
+
+restaurants_clean <- restaurants_tagged %>%
+  filter(!ai_review_flag)
+
+restaurants_flagged <- restaurants_tagged %>%
+  filter(ai_review_flag)
+
+qc <- summarise_classification_qc(restaurants_tagged)
+
+# poi_features_enriched |>
+#   filter(group_description == "Accommodation, eating and drinking") |>
+#   select(name, pointx_classification_code, group_description,
+#          category_description, classification_description) |>
+#   head(20)
 
 # Validate
-restaurants_tagged |>
-  st_drop_geometry() |>
-  count(classification) |>
-  mutate(prop = n / sum(n))
-
-stopifnot(
-  sum(table(restaurants_tagged$classification)) == nrow(restaurants_tagged)
-)
+# restaurants_tagged |>
+#   st_drop_geometry() |>
+#   count(classification) |>
+#   mutate(prop = n / sum(n))
+#
+# stopifnot(
+#   sum(table(restaurants_tagged$classification)) == nrow(restaurants_tagged)
+# )
 
 # To review 1209
 
 # Logic
-# Run gemini-2.5-flash on all 1209
+# Run gemini-3.1-flash-lite on al 1209
 # Send only low-confidence cases to gemini-2.5-pro
 # sequential batch processing is the safer choice, 50 rows per call
 # Use ellmer batch helpers to manage multi-prompt workflows by ysing
@@ -338,117 +500,172 @@ Sys.getenv("GEMINI_API_KEY")
 
 if (nrow(restaurants_flagged) > 0) {
 
-  result_type <- type_object(
-    "One classification result for one restaurant row.",
-    ethnic_label = type_enum(
-      c("ethnic", "other", "unknown"),
-      "Use 'ethnic' when the name, brand, or qualifier strongly indicates a specific cuisine or ethnic food tradition; 'other' when there is no strong ethnic signal; 'unknown' when evidence is too ambiguous."
+  restaurants_flagged <- restaurants_flagged |>
+    mutate(row_id = row_number())
+
+  result_type <- type_array(
+    type_object(
+      row_id = type_integer(
+        "Input row identifier."
+      ),
+      ethnic_label = type_enum(
+        c("ethnic", "other", "unknown")
+      ),
+      chain_label = type_enum(
+        c("chain", "independent", "unknown")
+      ),
+      confidence = type_number(
+        "Confidence from 0 to 1.",
+        required = FALSE
+      ),
+      reason = type_string(
+        "Brief explanation.",
+        required = FALSE
+      )
     ),
-    chain_label = type_enum(
-      c("chain", "independent", "unknown"),
-      "Use 'chain' when the restaurant is part of a known multi-site brand or franchise; 'independent' when it is not a chain; 'unknown' when evidence is too ambiguous."
-    ),
-    confidence = type_number(
-      "Confidence score from 0.0 to 1.0.",
-      required = FALSE
-    ),
-    reason = type_string(
-      "Very brief explanation.",
-      required = FALSE
-    )
+    description =
+      paste(
+        "Return exactly one classification result for every input row_id.",
+        "Do not omit any row."
+      )
   )
 
-  prompts <- restaurants_flagged |>
-    st_drop_geometry() |>
-    mutate(
-      prompt = purrr::pmap_chr(
-        list(name, brand, qualifier_data),
-        function(name, brand, qualifier_data) {
-          paste0(
-            "Classify this restaurant row.\n\n",
-            "name: ", coalesce(name, ""), "\n",
-            "brand: ", coalesce(brand, ""), "\n",
-            "qualifier: ", coalesce(qualifier_data, ""), "\n\n",
-            "Decision rules:\n",
-            "1. Chain wins over ethnic if both appear.\n",
-            "2. Generic-only qualifiers should usually be independent, not unknown.\n",
-            "3. Use unknown only when evidence is missing or contradictory.\n",
-            "4. Keep the reason brief.\n"
-          )
-        }
+  restaurants_per_prompt <- 20
+
+  prompt_groups <- split(
+    restaurants_flagged |>
+      st_drop_geometry(),
+    ceiling(seq_len(nrow(restaurants_flagged)) /
+      restaurants_per_prompt)
+  )
+
+  prompts <- lapply(
+    prompt_groups,
+    function(df) {
+
+      rows_text <- paste0(
+        "row_id: ", df$row_id, "\n",
+        "name: ", coalesce(df$name, ""), "\n",
+        "brand: ", coalesce(df$brand, ""), "\n",
+        "qualifier: ", coalesce(df$qualifier_data, ""
+        ),
+        collapse = "\n\n"
       )
-    )
+
+      paste(
+        "Return an array of classification objects.",
+        "",
+        "Each object must contain:",
+        "- row_id", "",
+        "- ethnic_label", "",
+        "- chain_label", "",
+        "Every input row_id must appear exactly once in the output.",
+        "Do not omit rows.",
+        "Do not create additional rows.",
+        "",
+        "Decision rules:",
+        "1. Chain wins over ethnic if both appear.",
+        "2. Generic-only qualifiers should usually be independent.",
+        "3. Use unknown only when evidence is missing or contradictory.",
+        "4. Keep reason brief.",
+        "",
+        rows_text,
+        sep = "\n"
+      )
+    }
+  )
 
   dir.create("chunk_results", showWarnings = FALSE)
 
-  message("Starting parallel_chat_structured")
-
-  batch_size <- 100
-
-  batch_ids <- split(
-    seq_len(nrow(prompts)),
-    ceiling(seq_len(nrow(prompts)) / batch_size)
+  chat <- chat_google_gemini(
+    model = "gemini-3.1-flash-lite"
   )
 
-  results <- vector("list", length(batch_ids))
+  message("Starting parallel_chat_structured")
 
-  chat <- chat_google_gemini(model = "gemini-3.1-flash-lite-preview")
+  ai_results <- parallel_chat_structured(
+    chat = chat,
+    prompts = prompts,
+    type = result_type,
+    max_active = 2,
+    rpm = 12,
+    on_error = "continue"
+  ) |>
+    as_tibble()
 
-  for (i in seq_along(batch_ids)) {
-    # 15 RPM, 500 RPD, 250K TPM. Only model with a usable RPD for batching.
+  class(ai_results)
+  str(ai_results)
 
-    idx <- batch_ids[[i]]
-
-    batch_prompts <- as.list(prompts$prompt[idx])
-
-    message("Batch ", i, " / ", length(batch_ids))
-
-    results[[i]] <- parallel_chat_structured(
-      chat = chat,
-      prompts = batch_prompts,
-      type = result_type,
-      max_active = 10,
-      rpm = 500,
-      on_error = "continue"
+  saveRDS(
+    ai_results,
+    file.path(
+      "chunk_results",
+      "all_results.rds"
     )
+  )
 
-    saveRDS(
-      results[[i]],
-      file.path("chunk_results", paste0("batch_", i, ".rds"))
-    )
-  }
 
-  ai_results <- list_rbind(results)
   if (!".error" %in% names(ai_results)) {
     ai_results$.error <- NA_character_
   }
 
-  ai_results <- ai_results
-  mutate(
-    had_error = !is.na(.error),
-    ai_reason = if_else(
-      had_error,
-      "Structured output failed",
-      coalesce(as.character(reason), "No reason returned")
-    ),
-    ai_ethnic_label = coalesce(as.character(ethnic_label), "unknown"),
-    ai_chain_label = coalesce(as.character(chain_label), "unknown"),
-    ai_confidence = suppressWarnings(as.numeric(confidence))
-  ) |>
-    select(ai_ethnic_label, ai_chain_label, ai_confidence, ai_reason)
-
-  # saveRDS(ai_results, file.path("chunk_results", "ai_results.rds"))
+  ai_results <- ai_results |>
+    mutate(
+      had_error = !is.na(.error),
+      ai_reason = if_else(
+        had_error,
+        "Structured output failed",
+        coalesce(
+          as.character(reason),
+          "No reason returned"
+        )
+      ),
+      ai_ethnic_label = coalesce(
+        as.character(ethnic_label),
+        "unknown"
+      ),
+      ai_chain_label = coalesce(
+        as.character(chain_label),
+        "unknown"
+      ),
+      ai_confidence = suppressWarnings(
+        as.numeric(confidence)
+      )
+    ) |>
+    select(
+      row_id,
+      ai_ethnic_label,
+      ai_chain_label,
+      ai_confidence,
+      ai_reason
+    )
 
   message("Finished parallel_chat_structured")
 
   restaurants_ai <- restaurants_flagged |>
-    select(-prompt) |>
-    bind_cols(ai_results)
+    left_join(
+      ai_results,
+      by = "row_id"
+    )
+
+  missing_ids <- setdiff(
+    restaurants_flagged$row_id,
+    restaurants_ai$row_id[
+      !is.na(restaurants_ai$ai_ethnic_label)
+    ]
+  )
+
+  if (length(missing_ids) > 0) {
+    warning(
+      length(missing_ids),
+      " row_ids were not returned by the model."
+    )
+  }
 
   restaurants_final <- bind_rows(
     restaurants_clean |>
       mutate(
-        global_row_id = NA_integer_,
+        row_id = NA_integer_,
         ai_ethnic_label = NA_character_,
         ai_chain_label = NA_character_,
         ai_confidence = NA_real_,
@@ -456,17 +673,18 @@ if (nrow(restaurants_flagged) > 0) {
       ),
     restaurants_ai
   )
+
 } else {
+
   restaurants_final <- restaurants_clean |>
     mutate(
-      global_row_id = NA_integer_,
+      row_id = NA_integer_,
       ai_ethnic_label = NA_character_,
       ai_chain_label = NA_character_,
       ai_confidence = NA_real_,
       ai_reason = NA_character_
     )
 }
-
 
 # Final classification
 restaurants_final <- restaurants_final |>
@@ -480,6 +698,7 @@ restaurants_final <- restaurants_final |>
     ethnic_final, chain_final, confidence_final, ai_reason,
     -any_of(c("ethnic_rule", "chain_rule", "ai_review_flag", "prompt"))
   )
+
 # Verify
 n_classified <- nrow(restaurants_final)
 n_total <- nrow(restaurants_clean) + nrow(restaurants_flagged)
@@ -494,7 +713,7 @@ if (n_classified != n_total) {
   )
 }
 
-# 09:42
+# 09:57
 system("rundll32 user32.dll,MessageBeep")
 system.time()
 
