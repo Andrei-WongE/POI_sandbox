@@ -252,8 +252,21 @@ brand_lookup <- tribble(
   "morrisons", "mainstream_chain", "standard_supermarket_chain",
   "co-op", "mainstream_chain", "standard_supermarket_chain",
   "coop", "mainstream_chain", "standard_supermarket_chain",
+  "co-operative", "mainstream_chain", "standard_supermarket_chain",
   "spar", "mainstream_chain", "standard_supermarket_chain",
-  "budgens", "mainstream_chain", "standard_supermarket_chain"
+  "budgens", "mainstream_chain", "standard_supermarket_chain",
+  "tfc", "mainstream_chain", "standard_supermarket_chain",
+  "costcutter", "soft_franchise", "symbol_group_convenience",
+  "londis",     "soft_franchise", "symbol_group_convenience",
+  "nisa",       "soft_franchise", "symbol_group_convenience",
+  "premier",    "soft_franchise", "symbol_group_convenience",
+  "best-one",   "soft_franchise", "symbol_group_convenience",
+  "mace",       "soft_franchise", "symbol_group_convenience",
+  "mccolls",    "soft_franchise", "symbol_group_convenience",
+  "day today",  "soft_franchise", "symbol_group_convenience",
+  "shell select", "forecourt",     "forecourt_convenience",
+  "esso",       "forecourt",     "forecourt_convenience",
+  "on the run", "forecourt",     "forecourt_convenience"
 )
 
 poi_groups <- read_poi_lookup("POI GROUPS.txt") %>%
@@ -388,16 +401,25 @@ classify_poi_food_typologies <- function(poi_sf) {
         qualifier_is_cuisine & qualifier_data_std != "" ~ qualifier_data_std,
         TRUE ~ NA_character_
       ),
+      # REVIEW possible_poverty_premium price signal should probably only apply to true independents, not symbol groups.
       economic_typology = case_when(
-        food_outlet_base == "supermarket_chain" & economic_refine == "hard_discounter" ~ "hard_discounter",
+        # Supermarket chain — brand-specific first, generic last
+        food_outlet_base == "supermarket_chain" & economic_refine == "hard_discounter"     ~ "hard_discounter",
         food_outlet_base == "supermarket_chain" & economic_refine == "premium_supermarket" ~ "premium_supermarket",
         food_outlet_base == "supermarket_chain" & express_flag ~ "local_express_topup",
         food_outlet_base == "supermarket_chain" ~ "superstore_or_full_line_chain",
+        # Convenience — brand-specific first, independent last
+        food_outlet_base == "convenience_or_independent_supermarket" & economic_refine == "symbol_group_convenience" ~ "symbol_group_convenience",
+        food_outlet_base == "convenience_or_independent_supermarket" & economic_refine == "forecourt_convenience"    ~ "forecourt_convenience",
         food_outlet_base == "convenience_or_independent_supermarket" ~ "small_convenience_or_independent_supermarket",
+        # Everything else
         food_outlet_base == "cash_and_carry" ~ "bulk_value_wholesale",
         food_outlet_base == "market" ~ "market_retail",
         food_outlet_base == "fastfood_delivery_service" ~ "delivery_focused_foodservice",
-        food_outlet_base %in% c("grocer_farmshop_pyo", "butcher", "fishmonger", "bakery", "delicatessen", "organic_health_specialist") ~ "specialist_food_retail",
+        food_outlet_base %in% c(
+          "grocer_farmshop_pyo", "butcher", "fishmonger",
+          "bakery", "delicatessen", "organic_health_specialist"
+        ) ~ "specialist_food_retail",
         !is.na(food_outlet_base) ~ "other_foodservice_or_retail",
         TRUE ~ NA_character_
       ),
@@ -460,21 +482,22 @@ classify_poi_food_typologies <- function(poi_sf) {
 summarise_classification_qc <- function(restaurants_tagged) {
 
   n_total <- nrow(restaurants_tagged)
+  food_only <- restaurants_tagged %>% filter(!is.na(food_outlet_base))
+  n_food    <- nrow(food_only)
 
-  # .n_total name avoids any collision with dplyr
-  count_with_prop <- function(data, var, .n_total) {
+  count_with_prop <- function(data, var, .n) {
     data %>%
       st_drop_geometry() %>%
       count({{ var }}, name = "n", sort = TRUE) %>%
-      mutate(prop = n / .n_total)
+      mutate(prop = n / .n)
   }
 
   status_counts <- count_with_prop(restaurants_tagged, classification_status, n_total)
-  food_outlet_counts <- count_with_prop(restaurants_tagged, food_outlet_base, n_total)
-  public_health_counts <- count_with_prop(restaurants_tagged, public_health_typology, n_total)
-  economic_counts <- count_with_prop(restaurants_tagged, economic_typology, n_total)
-  sociocultural_counts <- count_with_prop(restaurants_tagged, sociocultural_typology, n_total)
-  formality_counts <- count_with_prop(restaurants_tagged, formality_typology, n_total)
+  food_outlet_counts <- count_with_prop(food_only, food_outlet_base, n_food)
+  public_health_counts <- count_with_prop(food_only, public_health_typology, n_food)
+  economic_counts <- count_with_prop(food_only, economic_typology, n_food)
+  sociocultural_counts <- count_with_prop(food_only, sociocultural_typology, n_food)
+  formality_counts <- count_with_prop(food_only, formality_typology, n_food)
 
   # Non-food POIs have NA across all classification_fields, exclude from unresolved check!
   unresolved_rows <- restaurants_tagged %>%
@@ -484,17 +507,19 @@ summarise_classification_qc <- function(restaurants_tagged) {
   # All count tables must sum to total; review flags must align with unresolved fields
   stopifnot(
     sum(status_counts$n)        == n_total,
-    sum(food_outlet_counts$n)   == n_total,
-    sum(public_health_counts$n) == n_total,
-    sum(economic_counts$n)      == n_total,
-    sum(sociocultural_counts$n) == n_total,
-    sum(formality_counts$n)     == n_total,
+    sum(food_outlet_counts$n)   == n_food,
+    sum(public_health_counts$n) == n_food,
+    sum(economic_counts$n)      == n_food,
+    sum(sociocultural_counts$n) == n_food,
+    sum(formality_counts$n)     == n_food,
     all(unresolved_rows$ai_review_flag[unresolved_rows$unresolved]),
+    # rows that are not unresolved should not have ai_review_flag = TRUE.
     !any(unresolved_rows$ai_review_flag[!unresolved_rows$unresolved])
   )
 
   list(
     total_n = n_total,
+    total_food_n = n_food,
     classification_status = status_counts,
     food_outlet_base = food_outlet_counts,
     public_health_typology = public_health_counts,
@@ -519,10 +544,14 @@ qc <- summarise_classification_qc(restaurants_tagged)
 
 # Save outputs
 
-saveRDS(restaurants_tagged,  here("Output", glue("restaurants_tagged_{CLASSIFICATION_VERSION}.rds")))
-saveRDS(restaurants_clean,   here("Output", glue("restaurants_clean_{CLASSIFICATION_VERSION}.rds")))
-saveRDS(restaurants_flagged, here("Output", glue("restaurants_flagged_{CLASSIFICATION_VERSION}.rds")))
-saveRDS(qc,                  here("Output", glue("qc_{CLASSIFICATION_VERSION}.rds")))
+saveRDS(restaurants_tagged,  here("Output",
+  glue("restaurants_tagged_{CLASSIFICATION_VERSION}.rds")))
+saveRDS(restaurants_clean,   here("Output",
+  glue("restaurants_clean_{CLASSIFICATION_VERSION}.rds")))
+saveRDS(restaurants_flagged, here("Output",
+  glue("restaurants_flagged_{CLASSIFICATION_VERSION}.rds")))
+saveRDS(qc,                  here("Output",
+  glue("qc_{CLASSIFICATION_VERSION}.rds")))
 
 # Validate
 restaurants_tagged %>%
@@ -535,6 +564,11 @@ restaurants_tagged %>%
 # classification_status      n   prop
 # 1              non_food 380737 0.8957
 # 2            classified  44317 0.1043
+
+# As expected
+# Restaurants (10,278) and convenience/independent supermarkets (8,691) dominate
+# Fast food (8,106) and cafes (6,685) solid middle tier
+# Specialist retail (butchers, fishmongers, confectioners) small but present
 
 # To review 1209/66
 
