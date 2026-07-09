@@ -243,6 +243,8 @@ brand_lookup <- tribble(
   "waitrose", "premium", "premium_supermarket",
   "marks & spencer", "premium", "premium_supermarket",
   "m&s", "premium", "premium_supermarket",
+  "m & s simply food", "premium", "premium_supermarket",
+  "marks and spencer", "premium", "premium_supermarket",
   "whole foods", "premium", "premium_supermarket",
   "planet organic", "premium", "premium_supermarket",
   "tesco", "mainstream_chain", "standard_supermarket_chain",
@@ -266,7 +268,22 @@ brand_lookup <- tribble(
   "day today",  "soft_franchise", "symbol_group_convenience",
   "shell select", "forecourt",     "forecourt_convenience",
   "esso",       "forecourt",     "forecourt_convenience",
-  "on the run", "forecourt",     "forecourt_convenience"
+  "on the run", "forecourt",     "forecourt_convenience",
+  "shell select",   "forecourt", "forecourt_convenience",
+  "esso",           "forecourt", "forecourt_convenience",
+  "on the run",     "forecourt", "forecourt_convenience",
+  "wh smith",       "forecourt", "forecourt_convenience",  # station/travel retail
+  "whistlestop",    "forecourt", "forecourt_convenience",
+  "relay",          "forecourt", "forecourt_convenience",
+  "bp connect",     "forecourt", "forecourt_convenience",
+  "texaco",         "forecourt", "forecourt_convenience",
+  "murco",          "forecourt", "forecourt_convenience",
+  "martin's",     "soft_franchise", "symbol_group_convenience",
+  "mccolls",      "soft_franchise", "symbol_group_convenience",
+  "day today",    "soft_franchise", "symbol_group_convenience",
+  "day-today",    "soft_franchise", "symbol_group_convenience",
+  "lifestyle express", "soft_franchise", "symbol_group_convenience",
+  "simply fresh", "soft_franchise", "symbol_group_convenience",
 )
 
 poi_groups <- read_poi_lookup("POI GROUPS.txt") %>%
@@ -1076,3 +1093,22 @@ table(points_sf$pos_accuracy) # Flag 366 points with value 4 as they are
 # 3.4. Semantic Delineation and Topic Modelling (LDA)
 # Functional Area Delineation: train a Doc2Vec model to vectorize both POI classes ("words")
 # and LSOAs ("documents") directly
+
+# 4. Implement geographic retail measures, see lytleMeasuresFoodEnvironment2017
+# Food swamp indicators
+## Retail Food Environment Index (RFEI)
+# RFEI =  (Fast Food Restaurants + Convenience Stores)/
+# (Supermarkets + Large Grocery Stores + Produce Markets)
+
+## Modified Retail Food Environment Index (mRFEI)
+# mRFEI = Healthy Food Retailers/
+# (Healthy Food Retailers + Less Healthy Food Retailers) ×100
+
+# Food mirage indicators
+# FMI = Mean Cost of a Standardised Healthy Food Basket in Neighborhood i/
+# Median Household Income of Neighborhood i
+
+# Spatial Price Mismatch (SPM) Score
+# food mirage is mathematically flagged when a geographic area falls simultaneously
+# into the lowest 20% for median household income but ranks in the highest 20% for
+# average food-store price tiering within a 15-minute walking catchment.
