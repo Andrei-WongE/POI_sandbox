@@ -196,7 +196,8 @@ list(unique(poi_sf$qualifier_data[poi_sf$pointx_class == "01020043"]))
 # USe a set of alternative classification according to food environment lit
 # USe of review_reason facilitates audit
 # Matain foodservice and food retail separate
-# food_outlet_base now reflects PointX's original coding; retail_format_typology# reflects the corrected format after brand and express refinement.
+# food_outlet_base now reflects PointX's original coding; retail_format_typology
+# reflects the corrected format after brand and express refinement.
 
 # Single canonical hierarchy (poi_lookup).
 # Classification mapping moved into a lookup table.
@@ -896,9 +897,33 @@ stopifnot(
 # 1              non_food 375386 0.883149
 # 2            classified  49668 0.116851
 
+# Additional visual checks of what is NOT classified as food
+View(restaurants_tagged[restaurants_tagged$is_food_candidate == FALSE, ])
+list(unique((restaurants_tagged$groupname[restaurants_tagged$is_food_candidate == FALSE])))
+# [[1]]
+# [1] "Commercial Services",                "Transport"
+# [3] "Public Infrastructure",              "Manufacturing and Production"
+# [5] "Sport and Entertainment",            "Attractions"
+# [7] "Retail",                             "Education and Health"
+# [9] "Accommodation, Eating and Drinking"
+list(unique((restaurants_tagged$categoryname[restaurants_tagged$groupname  == "Retail" & restaurants_tagged$is_food_candidate == FALSE])))
+# [[1]]
+# [1] "Household, Office, Leisure and Garden", "Motoring"
+# [3] "Clothing and Accessories" ,             "Food, Drink and Multi Item Retail
+list(unique((restaurants_tagged$classname[restaurants_tagged$categoryname == "Food, Drink and Multi Item Retail" & restaurants_tagged$is_food_candidate == FALSE])))
+# [[1]]
+# [1] "Green and New Age Goods"
+View(as.data.frame(restaurants_tagged[
+  restaurants_tagged$categoryname == "Food, Drink and Multi Item Retail" &
+    restaurants_tagged$is_food_candidate == FALSE,
+]))
 
-# As expected
-# Restaurants (10,278) and convenience/independent supermarkets (8,691) dominate
+list(unique((restaurants_tagged$classname[restaurants_tagged$categoryname  == "Eating and Drinking" & restaurants_tagged$is_food_candidate == FALSE])))
+# [[1]]
+# [1] "Banqueting and Function Rooms" "Internet Cafes"
+
+
+# As exurants (10,278) and convenience/independent supermarkets (8,691) dominate
 # Fast food (8,106) and cafes (6,685) solid middle tier
 # Specialist retail (butchers, fishmongers, confectioners) small but present
 
@@ -937,240 +962,239 @@ restaurants_clean <- readRDS(here("Output", glue("restaurants_clean_{CLASSIFICAT
 restaurants_flagged <- readRDS(here("Output", glue("restaurants_flagged_{CLASSIFICATION_VERSION}.rds")))
 qc <- readRDS(here("Output", glue("qc_{CLASSIFICATION_VERSION}.rds")))
 
-# # AI classification only for flagged rows
-# Sys.getenv("GEMINI_API_KEY")
-#
-# if (nrow(restaurants_flagged) > 0) {
-#
-#   restaurants_flagged <- restaurants_flagged |>
-#     mutate(row_id = row_number())
-#
-#   result_type <- type_array(
-#     type_object(
-#       row_id = type_integer(
-#         "Input row identifier."
-#       ),
-#       ethnic_label = type_enum(
-#         c("ethnic", "other", "unknown")
-#       ),
-#       chain_label = type_enum(
-#         c("chain", "independent", "unknown")
-#       ),
-#       confidence = type_number(
-#         "Confidence from 0 to 1.",
-#         required = FALSE
-#       ),
-#       reason = type_string(
-#         "Brief explanation.",
-#         required = FALSE
-#       )
-#     ),
-#     description =
-#       paste(
-#         "Return exactly one classification result for every input row_id.",
-#         "Do not omit any row."
-#       )
-#   )
-#
-#   restaurants_per_prompt <- 20
-#
-#   prompt_groups <- split(
-#     restaurants_flagged |>
-#       st_drop_geometry(),
-#     ceiling(seq_len(nrow(restaurants_flagged)) /
-#       restaurants_per_prompt)
-#   )
-#
-#   prompts <- lapply(
-#     prompt_groups,
-#     function(df) {
-#
-#       rows_text <- paste0(
-#         "row_id: ", df$row_id, "\n",
-#         "name: ", coalesce(df$name, ""), "\n",
-#         "brand: ", coalesce(df$brand, ""), "\n",
-#         "qualifier: ", coalesce(df$qualifier_data, ""
-#         ),
-#         collapse = "\n\n"
-#       )
-#
-#       paste(
-#         "Return an array of classification objects.",
-#         "",
-#         "Each object must contain:",
-#         "- row_id", "",
-#         "- ethnic_label", "",
-#         "- chain_label", "",
-#         "Every input row_id must appear exactly once in the output.",
-#         "Do not omit rows.",
-#         "Do not create additional rows.",
-#         "",
-#         "Decision rules:",
-#         "1. Chain wins over ethnic if both appear.",
-#         "2. Generic-only qualifiers should usually be independent.",
-#         "3. Use unknown only when evidence is missing or contradictory.",
-#         "4. Keep reason brief.",
-#         "",
-#         rows_text,
-#         sep = "\n"
-#       )
-#     }
-#   )
-#
-#   dir.create("chunk_results", showWarnings = FALSE)
-#
-#   chat <- chat_google_gemini(
-#     model = "gemini-3.1-flash-lite"
-#   )
-#
-#   message("Starting parallel_chat_structured")
-#
-#   ai_results <- parallel_chat_structured(
-#     chat = chat,
-#     prompts = prompts,
-#     type = result_type,
-#     max_active = 2,
-#     rpm = 12,
-#     on_error = "continue"
-#   ) |>
-#     as_tibble()
-#
-#   class(ai_results)
-#   str(ai_results)
-#
-#   saveRDS(
-#     ai_results,
-#     file.path(
-#       "chunk_results",
-#       "all_results.rds"
-#     )
-#   )
-#
-#
-#   if (!".error" %in% names(ai_results)) {
-#     ai_results$.error <- NA_character_
-#   }
-#
-#   ai_results <- ai_results |>
-#     mutate(
-#       had_error = !is.na(.error),
-#       ai_reason = if_else(
-#         had_error,
-#         "Structured output failed",
-#         coalesce(
-#           as.character(reason),
-#           "No reason returned"
-#         )
-#       ),
-#       ai_ethnic_label = coalesce(
-#         as.character(ethnic_label),
-#         "unknown"
-#       ),
-#       ai_chain_label = coalesce(
-#         as.character(chain_label),
-#         "unknown"
-#       ),
-#       ai_confidence = suppressWarnings(
-#         as.numeric(confidence)
-#       )
-#     ) |>
-#     dplyr::select(
-#       row_id,
-#       ai_ethnic_label,
-#       ai_chain_label,
-#       ai_confidence,
-#       ai_reason
-#     )
-#
-#   message("Finished parallel_chat_structured")
-#
-#   restaurants_ai <- restaurants_flagged |>
-#     left_join(
-#       ai_results,
-#       by = "row_id"
-#     )
-#
-#   missing_ids <- setdiff(
-#     restaurants_flagged$row_id,
-#     restaurants_ai$row_id[
-#       !is.na(restaurants_ai$ai_ethnic_label)
-#     ]
-#   )
-#
-#   if (length(missing_ids) > 0) {
-#     warning(
-#       length(missing_ids),
-#       " row_ids were not returned by the model."
-#     )
-#   }
-#
-#   restaurants_final <- bind_rows(
-#     restaurants_clean |>
-#       mutate(
-#         row_id = NA_integer_,
-#         ai_ethnic_label = NA_character_,
-#         ai_chain_label = NA_character_,
-#         ai_confidence = NA_real_,
-#         ai_reason = NA_character_
-#       ),
-#     restaurants_ai
-#   )
-#
-# } else {
-#
-#   restaurants_final <- restaurants_clean |>
-#     mutate(
-#       row_id = NA_integer_,
-#       ai_ethnic_label = NA_character_,
-#       ai_chain_label = NA_character_,
-#       ai_confidence = NA_real_,
-#       ai_reason = NA_character_
-#     )
-# }
-#
-# # Final classification
-# restaurants_final <- restaurants_final |>
-#   mutate(
-#     ethnic_final = coalesce(ethnic_rule, ai_ethnic_label, "unknown"),
-#     chain_final = coalesce(chain_rule, ai_chain_label, "unknown"),
-#     confidence_final = coalesce(ai_confidence, 1.0)
-#   ) |>
-#   dplyr::select(
-#     geometry, name, brand, qualifier_data,
-#     ethnic_final, chain_final, confidence_final, ai_reason,
-#     -any_of(c("ethnic_rule", "chain_rule", "ai_review_flag", "prompt"))
-#   )
-#
-# # Verify
-# n_classified <- nrow(restaurants_final)
-# n_total <- nrow(restaurants_clean) + nrow(restaurants_flagged)
-#
-# if (n_classified != n_total) {
-#   stop(
-#     paste0(
-#       "Final row count mismatch: ",
-#       n_classified, " rows in restaurants_final vs ",
-#       n_total, " expected rows."
-#     )
-#   )
-# }
-#
-# # 09:57
+# AI classification only for flagged rows
+Sys.getenv("GEMINI_API_KEY")
+
+if (row(restaurants_flagged) > 0) {
+
+  restauants_flagged <- restaurants_flagged |>
+    mutate(row_id = row_number())
+
+  result_type - type_array(
+    type_object(
+      row_id = type_integer(
+        "Input row identifier."
+      ),
+      ethnic_label = type_enum(
+        c("ethnic", "other", "unknown")
+      ),
+      chain_label = type_enum(
+        c("chain", "independent", "unknown")
+      ),
+      confidence = type_number(
+        "Confidence from 0 to 1.",
+        required = FALSE
+      ),
+      reason = type_string(
+        "Brief explanation.",
+        required = FALSE
+      )
+    ),
+    description =
+      paste(
+        "Return exactly one classification result for every input row_id.",
+        "Do not omit any row."
+      )
+  )
+
+  restaurants_per_prompt <- 20
+
+  prompt_groups <- split(
+    restauants_flagged |>
+      st_drop_geomery(),
+    ceiling(seq_len(nrow(restaurants_flagged)) /
+      restaurants_per_prompt)
+  )
+
+  prompts <- lapply(
+    prompt_groups,
+    function(df) {
+
+      rows_text <- paste0("row_id: ", df$row_id, "\n",
+        "name: ", coalesce(df$ame, ""), "\n",
+        "brand: ", coalesce(df$brand, ""), "\n",
+        "qualifier: ", coalesce(df$qualifier_data, ""
+        ),
+        collapse = "\n\n"
+      )
+
+      paste(
+        "Return an array of classification objects.",
+        "",
+        "Each object must contain",
+        "- row_id", "",
+        "- ethnic_label", "",
+        "- chain_label", "",
+        "Every input row_id must appear exactly once in the output.",
+        "Do not omit rows.",
+        "Do not create additional rows.",
+        "",
+        "Decision rules:",
+        "1. Chain wins over ethnic if both appear.",
+        "2. Generic-only qualifiers should usually be independent.",
+        "3. Use unknown only when evidence is missing or contradictory.",
+        "4. Keep reason brief.",
+        "",
+        rows_text,
+        sep = "\n"
+      )
+    }
+  )
+
+  dir.create("chunk_results", showWarnings = FALSE)
+
+  chat <- chat_google_gemini(
+    model = "gemini-3.1-flash-lite"
+  )
+
+  message("Starting parallel_chat_tructured")
+
+  ai_results <- parallel_chat_structured(
+    chat = chat,
+    prompts = prompts,
+    type = result_type,
+    max_active = 2,
+    rpm = 12,
+    on_error = "continue"
+  ) |>
+    as_tibble()
+
+  class(ai_results)
+  str(ai_results)
+
+  saveRDS(
+    ai_results,
+    file.path(
+      "chunk_results",
+      "all_results.rds"
+    )
+  )
+
+
+  if (!".error" %in% names(ai_results)) {
+    ai_resuls$.error <- NA_character_
+  }
+
+  ai_results - ai_results |>
+    mutate(
+      had_error = !is.na(.error),
+      ai_reason = if_else(
+        had_error,
+        "Sructured output failed",
+        coalesce(
+          as.character(reason),
+          "No reasn returned"
+        )
+      ),
+      ai_ethnic_label = coalesce(
+        as.character(ethnic_label),
+        "unknown"
+      ),
+      ai_chain_label = coalesce(
+        as.character(chain_label),
+        "unknown"
+      ),
+      ai_confidence = suppressWarnings(
+        as.numeric(confidence)
+      )
+    ) |>
+    dplyr::select(
+      row_id,
+      ai_ethnic_label,
+      ai_chain_label,
+      ai_confidence,
+      ai_reason
+    )
+
+  message("Finished parallel_chat_structured")
+
+  restaurants_ai <- restaurants_flagged |>
+    left_join(
+      ai_results,
+      by = "row_id"
+    )
+
+  missing_ids <- setdiff(
+    restaurants_flagged$row_id,
+    restaurants_ai$row_id[
+      !is.na(restaurants_ai$ai_ethnic_label)
+    ]
+  )
+
+  if (length(missing_ids) > 0) {
+    warning(
+      length(missing_ids),
+      " row_ids were not returned by the model."
+    )
+  }
+
+  restaurants_final <- bind_ros(
+    restaurants_clean |>
+      mutate(
+        row_id = NA_integer_,
+        ai_ethnic_label = NA_character_,
+        ai_chain_label = NA_character_,
+        ai_confidence = NA_real_,
+        ai_reason = NA_character_
+      ),
+    restaurants_ai
+  )
+
+} else {
+
+  restaurants_final <- restaurants_clan |>
+    mutate(
+      row_id = NA_integer_,
+      ai_ethnic_label = NA_character_,
+      ai_chain_label = NA_character_,
+      ai_confidence = NA_real_,
+      ai_reason = NA_character_
+    )
+}
+
+# Final classification
+restaurants_final <- restaurants_final |>
+  mutate(
+    ethnic_final = coalesce(ethnic_rue, ai_ethnic_abel, "unknown"),
+    chain_final = coalesce(chain_rule, ai_chain_label, "unknown"),
+    confidence_final = coalesce(ai_confidence, 1.0)
+  ) |>
+  dplyr::select(
+    geometry, name, brand, qualifier_data,
+    ethnic_final, chain_final, confidence_final, i_reason,
+    -any_of(c("ethnic_rule", "chain_rule", "ai_review_flag", "prompt"))
+  )
+
+# Verify
+n_classified <- nrow(restaurants_final)
+n_total <- nrow(restaurants_clean) + nrow(restaurants_flagged)
+
+if (n_classified != n_total) {
+  stop(
+    paste0(
+      "Final row count mismatch: ",
+      n_classified, " rows in restaurants_final vs ",
+      n_total, " expected rows."
+    )
+  )
+}
+
+# 09:57
 # system("rundll32 user32.dll,MessageBeep")
 # system.time()
 
 # Groupname [09], Categories [47],
-# Classname [0671 Alcoholic drinks including off-licences and wholesalers [X]
+# Clasname [0671 Alcoholic drinks including off-licences and wholesalers [X]
 # 0661 Bakeries
 # 0662 Butchers
-# 0768 Cash and carry [X]
+# 0768 Cash and crry [X]
 # 0663 Confectioners [X]
 # 0699 Convenience stores and independent supermarkets
 # 0665 Delicatessens
 # 0666 Fishmongers
 # 0667 Frozen foods
 # 0668 Green and new age goods
-# 0669 Grocers, farm shops and pick your own
+# 0669 Grocers, farm shops nd pick your own
 # 0670 Herbs and spices
 # 0703 Livestock markets [X]
 # 0705 Markets
