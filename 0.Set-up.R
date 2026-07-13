@@ -537,9 +537,10 @@ classify_poi_food_typologies <- function(poi_sf) {
         brand_name_qualifier_std,
         "\\bpfs\\b|\\bpetrol\\b|\\bfuel\\b|\\besso\\b|\\bshell\\b|\\bbp\\b|\\btexaco\\b"
       ),
+      # REVIEWm circularity and category with 13 values
       travel_flag = str_detect(
         brand_name_qualifier_std,
-        "\\bmsa\\b|\\bmotorway service\\b|\\bservice area\\b|\\btravel\\b|\\bstation\\b|\\brail\\b|\\bairport\\b|\\bwh smith\\b|\\bwhsmith\\b|\\bwhistlestop\\b|\\brelay\\b"
+        "\\bmsa\\b|\\bmotorway service\\b|\\bservice area\\b|\\btravel\\b|\\bstation\\b|\\brail\\b|\\bairport\\b|\\bwhistlestop\\b|\\brelay\\b"
       ),
       hospital_flag = str_detect(
         brand_name_qualifier_std,
@@ -899,18 +900,26 @@ stopifnot(
 
 # Additional visual checks of what is NOT classified as food
 View(restaurants_tagged[restaurants_tagged$is_food_candidate == FALSE, ])
-list(unique((restaurants_tagged$groupname[restaurants_tagged$is_food_candidate == FALSE])))
+list(unique((restaurants_tagged$groupname[
+  restaurants_tagged$is_food_candidate == FALSE
+])))
 # [[1]]
 # [1] "Commercial Services",                "Transport"
 # [3] "Public Infrastructure",              "Manufacturing and Production"
 # [5] "Sport and Entertainment",            "Attractions"
 # [7] "Retail",                             "Education and Health"
 # [9] "Accommodation, Eating and Drinking"
-list(unique((restaurants_tagged$categoryname[restaurants_tagged$groupname  == "Retail" & restaurants_tagged$is_food_candidate == FALSE])))
+list(unique((restaurants_tagged$categoryname[
+  restaurants_tagged$groupname  == "Retail" &
+    restaurants_tagged$is_food_candidate == FALSE
+])))
 # [[1]]
 # [1] "Household, Office, Leisure and Garden", "Motoring"
 # [3] "Clothing and Accessories" ,             "Food, Drink and Multi Item Retail
-list(unique((restaurants_tagged$classname[restaurants_tagged$categoryname == "Food, Drink and Multi Item Retail" & restaurants_tagged$is_food_candidate == FALSE])))
+list(unique((restaurants_tagged$classname[
+  restaurants_tagged$categoryname == "Food, Drink and Multi Item Retail" &
+    restaurants_tagged$is_food_candidate == FALSE
+])))
 # [[1]]
 # [1] "Green and New Age Goods"
 View(as.data.frame(restaurants_tagged[
@@ -918,25 +927,111 @@ View(as.data.frame(restaurants_tagged[
     restaurants_tagged$is_food_candidate == FALSE,
 ]))
 
-list(unique((restaurants_tagged$classname[restaurants_tagged$categoryname  == "Eating and Drinking" & restaurants_tagged$is_food_candidate == FALSE])))
+list(unique((restaurants_tagged$classname[
+  restaurants_tagged$categoryname  == "Eating and Drinking" &
+    restaurants_tagged$is_food_candidate == FALSE
+])))
 # [[1]]
 # [1] "Banqueting and Function Rooms" "Internet Cafes"
 
+brand_refinement_summary
 
-# As exurants (10,278) and convenience/independent supermarkets (8,691) dominate
+list(unique(restaurants_tagged$retail_format_typology))
+# [[1]]
+# [1] NA                                             "specialist_food_retail"
+# [3] "superstore_or_full_line_chain"                "other_food_retail"
+# [5] "small_convenience_or_independent_supermarket" "premium_convenience"
+# [7] "local_express_topup"                          "frozen_food_specialist"
+# [9] "symbol_group_convenience"                     "market_retail"
+# [11] "bulk_wholesale"                               "hard_discounter"
+# [13] "travel_convenience"                           "forecourt_convenience"
+list(unique(restaurants_tagged$groupname[
+  is.na(restaurants_tagged$retail_format_typology)  &
+    restaurants_tagged$is_food_candidate  == FALSE
+]))
+# [[1]]
+# [1] "Commercial Services"                "Transport"
+# [3] "Public Infrastructure"              "Manufacturing and Production"
+# [5] "Sport and Entertainment"            "Attractions"
+# [7] "Retail"                             "Education and Health"
+# [9] "Accommodation, Eating and Drinking"
+list(unique(restaurants_tagged$categoryname[
+  is.na(restaurants_tagged$retail_format_typology)  &
+    restaurants_tagged$is_food_candidate == FALSE &
+    restaurants_tagged$groupname == "Retail"
+]))
+# [[1]]
+# [1] "Household, Office, Leisure and Garden", "Motoring"
+# [3] "Clothing and Accessories" ,  "Food, Drink and Multi Item Retail"
+list(unique(restaurants_tagged$classname[
+  is.na(restaurants_tagged$retail_format_typology)  &
+    restaurants_tagged$is_food_candidate == FALSE &
+    restaurants_tagged$categoryname == "Food, Drink and Multi Item Retail"
+]))
+# [[1]]
+# [1] "Green and New Age Goods"
+
+list(unique(restaurants_tagged$categoryname[
+  is.na(restaurants_tagged$retail_format_typology) &
+    !restaurants_tagged$is_food_candidate
+]))
+# [[1]]
+# [1] "It, Advertising, Marketing and Media Services" ,"Bus Transport"
+# [3] "Infrastructure and Facilities"                 ,"Personal, Consumer and Other Services"
+# [5] "Consultancies"                                 ,"Legal and Financial"
+# [7] "Construction Services"                         ,"Industrial Products"
+# [9] "Sports Complex"                                ,"Research and Design"
+# [11] "Historical and Cultural"                      , "Household, Office, Leisure and Garden"
+# [13] "Road and Rail"                                , "Health Practitioners and Establishments"
+# [15] "Animal Welfare"                               , "Bodies Of Water"
+# [17] "Industrial Features"                          , "Landscape Features"
+# [19] "Primary, Secondary and Tertiary Education"    , "Education Support Services"
+# [21] "Property and Development Services"            , "Water"
+# [23] "Transport, Storage and Delivery"              , "Tourism"
+# [25] "Recreational and Vocational Education"        , "Outdoor Pursuits"
+# [27] "Sport and Entertainment Support Services"     , "Organisations"
+# [29] "Accommodation"                                , "Contract Services"
+# [31] "Repair and Servicing"                         , "Central and Local Government"
+# [33] "Venues, Stage and Screen"                     , "Motoring"
+# [35] "Recreational"                                 , "Consumer Products"
+# [37] "Hire Services"                                , "Clothing and Accessories"
+# [39] "Walking"                                      , "Foodstuffs"
+# [41] "Botanical and Zoological"                     , "Employment and Career Agencies"
+# [43] "Gambling"                                     , "Eating and Drinking"
+# [45] "Farming"                                      , "Engineering Services"
+# [47] "Air"                                          , "Public Transport, Stations and Infrastructure"
+# [49] "Health Support Services"                      , "Recycling Services"
+# [51] "Extractive Industries"
+list(unique(restaurants_tagged$classname[
+  is.na(restaurants_tagged$retail_format_typology) &
+    !restaurants_tagged$is_food_candidate &
+    restaurants_tagged$categoryname == "Food, Drink and Multi Item Retail"
+]))
+# [[1]]
+# [1] "Banqueting and Function Rooms" "Internet Cafes
+# [[1]]
+# [1] "Green and New Age Goods"
+
+# Additional visual checks of what IS classified as food
+table(restaurants_tagged$retail_format_typology, restaurants_tagged$foodservice_format_typology)
+
+View(restaurants_tagged[
+  restaurants_tagged$retail_format_typology == "travel_convenience",
+])
+
+
+
+# As exurants (10,27rmarkets (8,691) dominate
 # Fast food (8,106) and cafes (6,685) solid middle tier
-# Specialist retail (butchers, fishmongers, confectioners) small but present
+# Specbutchers, fishmongers, confectioners) small but present
 
 # To review 1209/66
-
-# Classification review:
 # -------------------------
-# POI-only model is therefore appropriate for community retail exposure, not as
+# POI-only model is therefore appropriate for commt as
 # a direct measure of nutritional access or affordability.
 # The circular is_food_poi definition, duplicate brand joins,
-# retail-format conflation, and the need to separate outlet type
-# from observed affordability.
-# non-food POIs and unmapped food POIs were mixed together.
+# retail-format conflation, and the need to separate  affordability.
+# non-food POIsnmapped food POIs were mixed together.
 
 # petrol and fuel stations separately and multiple activities can co-locate at one site.
 #
