@@ -49,3 +49,4 @@
 *.utf8.md
 *.knit.md
 
+.posit/assistant

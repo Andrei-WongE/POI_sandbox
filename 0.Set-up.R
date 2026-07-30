@@ -537,7 +537,7 @@ classify_poi_food_typologies <- function(poi_sf) {
         brand_name_qualifier_std,
         "\\bpfs\\b|\\bpetrol\\b|\\bfuel\\b|\\besso\\b|\\bshell\\b|\\bbp\\b|\\btexaco\\b"
       ),
-      # REVIEWm circularity and category with 13 values
+      # REVIEWm circularity, source should not be Brand and category with 13 values
       travel_flag = str_detect(
         brand_name_qualifier_std,
         "\\bmsa\\b|\\bmotorway service\\b|\\bservice area\\b|\\btravel\\b|\\bstation\\b|\\brail\\b|\\bairport\\b|\\bwhistlestop\\b|\\brelay\\b"
@@ -1382,9 +1382,17 @@ DBI::dbExecute(con, "LOAD spatial;")
 # at index-creation time, so build table with an explicit geometry cast
 path <- here("Data", "poi_6378383.gpkg")
 
+# REVIEW
+# duckspatial::ddbs_write_vector(
+#   conn       = con,
+#   x          = poi_sf,
+#   name       = "poi",
+#   schema     = "main",        # or another schema if you prefer
+#   overwrite  = TRUE
+# )
 dbExecute(con, sprintf("
   CREATE OR REPLACE TABLE poi AS
-  dplyr::select *,
+  dplyr::select ,
   geom::GEOMETRY AS geom
   FROM ST_Read('%s')
 ", path))
@@ -1395,7 +1403,7 @@ DBI::dbGetQuery(con, "PRAGMA table_info('poi')")
 
 DBI::dbGetQuery(con, "
   dplyr::select
-    COUNT(*) AS n_total,
+    COUNT() AS n_total,
     SUM(CASE WHEN ST_IsValid(geom) THEN 1 ELSE 0 END) AS n_valid,
     SUM(CASE WHEN NOT ST_IsValid(geom) THEN 1 ELSE 0 END) AS n_invalid
   FROM poi
@@ -1412,7 +1420,7 @@ DBI::dbGetQuery(con, "
 
 DBI::dbGetQuery(con, "
   dplyr::select
-    COUNT(*) AS n_total,
+    COUNT() AS n_total,
     SUM(CASE WHEN geom IS NULL THEN 1 ELSE 0 END) AS n_null_geom,
     COUNT(DISTINCT ST_AsText(geom)) AS n_unique_geoms
   FROM poi
@@ -1420,7 +1428,7 @@ DBI::dbGetQuery(con, "
 
 DBI::dbGetQuery(con, "
   dplyr::select
-    COUNT(*) AS n_mismatch
+    COUNT() AS n_mismatch
   FROM poi
   WHERE ABS(feature_easting - ST_X(geom)) > 0.001
      OR ABS(feature_northing - ST_Y(geom)) > 0.001
@@ -1430,7 +1438,7 @@ path <- here("Data", "Boundaries", "LSOA_2011_London_gen_MHW.shp")
 
 dbExecute(con, sprintf("
   CREATE OR REPLACE TABLE lsoa_boundaries AS
-  dplyr::select *,
+  dplyr::select ,
   geom::GEOMETRY AS geom
   FROM ST_Read('%s')
 ", path))
@@ -1469,7 +1477,7 @@ GROUP BY point_id
 dbGetQuery(con, "
 dplyr::select
   point_class,
-  COUNT(*) AS n_points,
+  COUNT() AS n_points,
   SUM(is_within) AS total_is_within,
   SUM(is_touching) AS total_is_touching
 FROM classified_poi GROUP BY point_class
@@ -1480,13 +1488,13 @@ ORDER BY point_class
 # 1      inside   369697          369697                 0
 # 2     outside   130156              NA                NA
 
-dbGetQuery(con, "dplyr::select * FROM classified_poi LIMIT 10") #  No edge cases
+dbGetQuery(con, "dplyr::select  FROM classified_poi LIMIT 10") #  No edge cases
 
 # Assigning each POI point ID to the polygon ID that contains it
 dbExecute(con, "
   CREATE OR REPLACE TABLE points_with_polygons AS
   dplyr::select
-  p.*,
+  p.,
   l.LSOA11CD AS LSOA11CD
   FROM poi p
   INNER JOIN lsoa_boundaries l
@@ -1496,11 +1504,11 @@ dbExecute(con, "
 DBI::dbGetQuery(con, "PRAGMA table_info('points_with_polygons')")
 
 # Extract table to R,
-points_with_polygons <- DBI::dbGetQuery(con, "dplyr::select * FROM points_with_polygons")
+points_with_polygons <- DBI::dbGetQuery(con, "dplyr::select  FROM points_with_polygons")
 
 dbGetQuery(con, "SHOW TABLES")
 
-dbGetQuery(con, "dplyr::select COUNT(*) FROM points_with_polygons")
+dbGetQuery(con, "dplyr::select COUNT() FROM points_with_polygons")
 # count_star()
 # 1       369697
 
@@ -1530,6 +1538,22 @@ table(points_sf$pos_accuracy) # Flag 366 points with value 4 as they are
 
 # # Construct co-location indicators using leslieColocationQuotientNew2011 and
 # sadahiroMethodEvaluatingPoint2025 and sadahiroNewStatisticalMethod2025
+
+# Construct thematic subsets rather than analysing all POIs together.
+# Avoid mixing food and non-food POIs because both CLQ and segregation statistics assume categories belong to a common parent population.
+# Leslie & Kronenfeld explicitly recommend analysing categorical subsets within a meaningful joint population
+
+food_points_sf <- points_sf %>%
+  filter(
+    classification_status == "classified",
+    !is.na(food_domain)
+  )
+
+food_retail_sf <- food_points_sf %>%
+  filter(food_domain == "food_retail")
+
+foodservice_sf <- food_points_sf %>%
+  filter(food_domain == "foodservice")
 
 # 3.1. Spatial co-location and association mining (Point-to-Point)
 # Asymmetric Colocation Quotient (CLQ): Using the sfdep package in
@@ -1571,3 +1595,297 @@ table(points_sf$pos_accuracy) # Flag 366 points with value 4 as they are
 # food mirage is mathematically flagged when a geographic area falls simultaneously
 # into the lowest 20% for median household income but ranks in the highest 20% for
 # average food-store price tiering within a 15-minute walking catchment.
+
+
+# Section 3 is currently a placeholder. The preceding classification workflow
+# already gives you the structure needed to implement point-pattern analysis.
+# The key design decision is that analyses should operate on classified food points only,
+# not all POIs. The literature you attached supports two complementary approaches:
+#
+# 1. CLQ (Leslie & Kronenfeld, 2011) for asymmetric co-location between categorical food outlet types.
+# 2. Sadahiro's segregation measure Ξ(k) for testing whether outlet categories are spatially segregated or mixed.
+#
+#
+# Because your classification explicitly separates:
+#
+# `food_domain` → foodservice vs food\_retail
+#  `food_outlet_base`
+#  `retail_format_typology`
+#  `foodservice_format_typology`
+# `public_health_typology`
+#
+# the natural analytical unit is points\_sf filtered to classified food outlets.
+#
+#
+# ## 3. Implement spatial point data analysis
+#
+# ### 3.0 Analytical datasets
+#
+# Construct thematic subsets rather than analysing all POIs together.
+#
+# ```r
+# food_points_sf <- points_sf %>%
+#   filter(
+#     classification_status == "classified",
+#     !is.na(food_domain)
+#   )
+#
+# food_retail_sf <- food_points_sf %>%
+#   filter(food_domain == "food_retail")
+#
+# foodservice_sf <- food_points_sf %>%
+#   filter(food_domain == "foodservice")
+# ```
+#
+# Avoid mixing food and non-food POIs because both CLQ and segregation statistics assume categories belong to a common parent population.
+# Leslie & Kronenfeld explicitly recommend analysing categorical subsets within a meaningful joint population.
+#
+#
+#
+# ### 3.1 Spatial co-location and association mining (CLQ)
+#
+# #### Objective
+#
+# Test whether specific outlet categories preferentially locate near one another.
+#
+# Examples:
+#
+#  Fast-food takeaways → convenience stores
+#  Supermarkets → markets
+#  Restaurants → cafés
+#  Premium convenience → restaurants
+#  Ethnic grocers → restaurants of similar cuisine (if cuisine refinement added)
+#
+# #### Recommended category variable
+#
+# Start with:
+#
+# ```r
+# food_outlet_base
+# ```
+#
+# This is the most stable typology and avoids sparse categories.
+#
+# Later analyses can use:
+#
+# ```r
+# retail_format_typology
+# foodservice_format_typology
+# public_health_typology
+# ```
+#
+# #### Subsets
+#
+# Retail only
+#
+# ```r
+# food_retail_sf
+# ```
+#
+# Analyse:
+#
+# ```r
+# retail_format_typology
+# ```
+#
+# Examples:
+#
+#  hard\_discounter
+#  premium\_convenience
+#  symbol\_group\_convenience
+#  market\_retail
+#  frozen\_food\_specialist
+#
+# Foodservice only
+#
+# ```r
+# foodservice_sf
+# ```
+#
+# Analyse:
+#
+# ```r
+# foodservice_format_typology
+# ```
+#
+# Examples:
+#
+#  takeaway
+#  chain\_restaurant
+#  independent\_restaurant
+#  café
+#  pub\_bar
+#
+# Cross-domain
+#
+# ```r
+# food_points_sf
+# ```
+#
+# Analyse:
+#
+# ```r
+# combined_type
+# ```
+#
+# where:
+#
+# ```r
+# combined_type = coalesce(
+#   retail_format_typology,
+#   foodservice_format_typology
+# )
+# ```
+#
+# #### Statistical model
+#
+# Apply global CLQ using nearest neighbours and random relabelling, preserving point locations. This follows Leslie & Kronenfeld's null hypothesis that observed point geometry remains fixed while category labels are permuted.
+#
+#
+# Suggested neighbour sizes:
+#
+#   ```r
+# k = c(1, 3, 5, 10)
+# ```
+#
+# Sensitivity analysis is preferable because neighbourhood scale affects interpretation.
+#
+#
+#  CLQ matrix
+#  p-values
+#  heatmap
+#  network graph
+#
+# Interpretation:
+#
+#   ```text
+# CLQ > 1 = attraction
+# CLQ < 1 = avoidance
+# ```
+#
+#
+#
+#   ### 3.2 Point segregation and inhomogeneity
+#
+#   #### Objective
+#
+#   Assess whether outlet categories form segregated clusters or mixed environments.
+#
+# Use Sadahiro's Ξ(k) framework. It was developed specifically for categorical point data and evaluates segregation relative to random relabelling.
+#
+#
+# #### Segregation variables
+#
+# ##### Model 1: Retail formats
+#
+# ```r
+# retail_format_typology
+# ```
+#
+# Question:
+#
+# > Are hard discounters, premium retailers and convenience retailers spatially segregated?
+#
+# ##### Model 2: Foodservice formats
+#
+# ```r
+# foodservice_format_typology
+# ```
+#
+# Question:
+#
+# > Do takeaways cluster independently from restaurants and cafés?
+#
+# ##### Model 3: Public-health categories
+#
+# ```r
+# public_health_typology
+# ```
+#
+# Question:
+#
+# > Do unhealthy\_or\_risk outlets spatially cluster?
+#
+# This is probably the highest public-health value.
+#
+# #### Null model
+#
+# Use:
+#
+# ```r
+# Random labelling
+# ```
+#
+# not CSR.
+#
+# The literature and CLQ framework both emphasize preserving observed outlet locations while randomising category labels.
+#
+# #### Neighbourhood scale
+#
+# Sadahiro reports good performance across multiple k values and recommends examining several scales.
+#
+# Suggested:
+#
+# ```r
+# k = c(5,10,15,20)
+# ```
+#
+# Outputs:
+#
+#  Global Ξ(k)
+#  Local Ψi(k)
+#  Segregation maps
+#  Significance surfaces
+#
+#
+#
+# ### 3.3 Retail shadow and corporate dominance analysis
+#
+# This emerges naturally from your classification.
+#
+# Create:
+#
+# ```r
+# ownership_type
+# ```
+#
+# For example:
+#
+# ```r
+# chain
+# franchise
+# independent
+# ```
+#
+# derived from:
+#
+# ```r
+# matched_brand_key
+# brand_group
+# ```
+#
+# Then test:
+#
+# ```r
+# independent vs chain
+# ```
+#
+# using:
+#
+#  CLQ
+#  Segregation index Ξ(k)
+#
+# Questions:
+#
+#  Are independent food retailers spatially isolated?
+#  Do chains form exclusive retail clusters?
+#  Are independents colocated with chains?
+#
+# This is a stronger implementation of the "retail shadow index" idea than comparing fast-food delivery versus specialists.
+#
+#
+#  Potential weaknesses
+#
+#  Some typology classes may be sparse.
+#  Cuisine subtype may create many low-frequency categories.
+#  CLQ matrices become unstable when category counts are small (<10-20 observations). Leslie & Kronenfeld caution against very small categories.
